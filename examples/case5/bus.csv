@@ -1,0 +1,6 @@
+bus_id,type,name
+1,slack,substation
+2,pq,B2
+3,pq,B3
+4,pq,B4
+5,pq,B5

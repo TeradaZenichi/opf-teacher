@@ -1,0 +1,34 @@
+{
+  "name": "case5",
+  "description": "Feeder radial de distribuicao, 5 barras, 1 BESS e 1 PV",
+  "units": {
+    "power": "kW",
+    "reactive": "kVAr",
+    "energy": "kWh",
+    "impedance": "ohm",
+    "voltage": "kV"
+  },
+  "base": {
+    "s_base_kva": 1000.0,
+    "v_base_kv": 11.0
+  },
+  "grid": {
+    "bus": 1,
+    "v_ref_pu": 1.0,
+    "p_import_max_kw": 2000.0,
+    "p_export_max_kw": 2000.0,
+    "q_max_kvar": 2000.0,
+    "feed_in_tariff_ratio": 1.0
+  },
+  "voltage_limits": {
+    "v_min_pu": 0.95,
+    "v_max_pu": 1.05
+  },
+  "defaults": {
+    "power_factor": 0.95
+  },
+  "objective": {
+    "minimize": "energy_cost",
+    "demand_charge_per_kw": 0.0
+  }
+}
