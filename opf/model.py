@@ -141,18 +141,19 @@ def build_model(case: Case, *, exact_cone: bool = False) -> pyo.ConcreteModel:
         return m.soc[s, T[-1]] == d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
     m.soc_terminal = pyo.Constraint(m.S, rule=soc_cyclic)
 
+    # nao-simultaneidade import/export: SOS1 garante que no maximo um de
+    # {pimp, pexp} e nao-nulo por periodo, evitando round-trip degenerado sem
+    # poluir o objetivo e sem variaveis binarias (o solver ramifica -> MISOCP).
+    def no_roundtrip(m, t):
+        return [m.pimp[t], m.pexp[t]]
+    m.no_roundtrip = pyo.SOSConstraint(m.T, rule=no_roundtrip, sos=1)
+
     # --------------------------------------------------------------- objetivo
-    # Custo de energia + pequena regularizacao no throughput do grid, que quebra
-    # a degenerescencia import+export simultaneos (round-trip) sem alterar a
-    # decisao economica (price_eps ~ 0.001/kWh).
     r_fi = case.grid.feed_in_ratio
-    price_eps = 1e-3
     s_base = base.s_base_kva
 
     def cost(m):
-        energy = s_base * dt * sum(price[t] * (m.pimp[t] - r_fi * m.pexp[t]) for t in T)
-        reg = price_eps * s_base * dt * sum(m.pimp[t] + m.pexp[t] for t in T)
-        return energy + reg
+        return s_base * dt * sum(price[t] * (m.pimp[t] - r_fi * m.pexp[t]) for t in T)
     m.cost = pyo.Objective(rule=cost, sense=pyo.minimize)
 
     return m

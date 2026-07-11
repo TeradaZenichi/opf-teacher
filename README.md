@@ -81,13 +81,16 @@ python run.py examples/case5 --show # abre janela do matplotlib
 
 ## Solver
 
-O problema é um **QCQP convexo** (objetivo linear + restrição cônica), então o
-solver precisa suportar restrição quadrática/cônica — LP/MILP puro (ex.: HiGHS)
-**não** serve. Opções:
+O problema é um **MISOCP**: objetivo linear, restrição cônica (SOCP) e uma
+restrição **SOS1** por período (não-simultaneidade import/export). O solver
+precisa suportar cone quadrático **e** SOS/branch-and-bound — LP/MILP puro
+(ex.: HiGHS) e NLP contínuo puro (ex.: IPOPT) **não** servem. Opções:
 
-- **Gurobi** (`gurobi_direct`) — usado por padrão. Resolve QCP/SOCP nativamente.
-- **IPOPT** (`ipopt`) — NLP convexo, open-source.
-- **SCIP** (`scip` / PySCIPOpt) — open-source, QCQP.
+- **Gurobi** (`gurobi_direct`) — usado por padrão. Resolve SOCP + SOS1 nativamente.
+- **SCIP** (`scip` / PySCIPOpt) — open-source, MINLP/MISOCP.
+
+(Sem a restrição SOS1 — usando a variante com regularização ou `Pgrid` único — o
+modelo volta a ser um SOCP convexo e o IPOPT também resolve.)
 
 ### Licença Gurobi (acadêmica, gratuita)
 
