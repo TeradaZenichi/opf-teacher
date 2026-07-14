@@ -1,8 +1,8 @@
-"""Classes de dominio do problema (parametros + resultados).
+"""Domain classes: parameters in physical units, plus a `.result` after the solve.
 
-Parametros em unidades fisicas (kW, kVAr, kWh, ohm, kV). A conversao para
-por-unidade fica na classe Base e e usada dentro do modelo. Apos o solve, cada
-componente recebe um objeto `.result` com as series temporais da solucao:
+Parameters stay in engineering units (kW, kVAr, kWh, ohm, kV); Base does the
+per-unit conversion the model needs. Once solved, each component carries its own
+time series:
 
     case.bess[0].result.soc_kwh
     case.grid.result.import_kw
@@ -12,20 +12,20 @@ import pandas as pd
 
 
 class Base:
-    """Bases do sistema e conversoes fisico <-> por-unidade (Z_base = V^2/S)."""
+    """System bases and physical <-> per-unit conversions (Z_base = V^2/S)."""
 
     def __init__(self, s_base_kva, v_base_kv):
         self.s_base_kva, self.v_base_kv = s_base_kva, v_base_kv
         self.z_base_ohm = v_base_kv ** 2 * 1e3 / s_base_kva
 
-    def pu_power(self, kw): return kw / self.s_base_kva         # kW/kVAr/kVA -> p.u.
-    def pu_energy(self, kwh): return kwh / self.s_base_kva      # kWh -> p.u.*h
-    def pu_impedance(self, ohm): return ohm / self.z_base_ohm   # ohm -> p.u.
+    def pu_power(self, kw): return kw / self.s_base_kva         # kW / kVAr / kVA
+    def pu_energy(self, kwh): return kwh / self.s_base_kva      # kWh
+    def pu_impedance(self, ohm): return ohm / self.z_base_ohm
     def to_kw(self, pu): return pu * self.s_base_kva
     def to_kwh(self, pu): return pu * self.s_base_kva
 
 
-# --- resultados (preenchidos apos o solve) ------------------------------- #
+# Results, populated by opf.results after the solve.
 class BusResult:
     def __init__(self, v_pu): self.v_pu = v_pu
 
@@ -47,11 +47,12 @@ class BessResult:
 
 
 class PvResult:
-    def __init__(self, avail_kw, gen_kw, curtail_kw):
+    def __init__(self, avail_kw, gen_kw, curtail_kw, q_kvar):
         self.avail_kw, self.gen_kw, self.curtail_kw = avail_kw, gen_kw, curtail_kw
+        self.q_kvar = q_kvar
 
 
-# --- componentes (parametros fisicos + .result) -------------------------- #
+# Network components and devices.
 class Bus:
     def __init__(self, id, type, name, v_min_pu, v_max_pu, p_load_kw, q_load_kw):
         self.id, self.type, self.name = id, type, name
@@ -90,9 +91,9 @@ class Bess:
 
 
 class Pv:
-    def __init__(self, id, bus, p_max_kw, curtailable, power_factor, avail_kw):
-        self.id, self.bus, self.p_max_kw = id, bus, p_max_kw
-        self.curtailable, self.power_factor = curtailable, power_factor
+    def __init__(self, id, bus, p_max_kw, s_max_kva, control, curtailable, power_factor, avail_kw):
+        self.id, self.bus, self.p_max_kw, self.s_max_kva = id, bus, p_max_kw, s_max_kva
+        self.control, self.curtailable, self.power_factor = control, curtailable, power_factor
         self.avail_kw = avail_kw
         self.result = None
 
@@ -117,7 +118,7 @@ class Case:
         self.bess, self.pv, self.evse = bess, pv, evse
         self.timestamps, self.dt_h, self.price = timestamps, dt_h, price
         self.objective = objective
-        self.parent_branch, self.children = {}, {}    # topologia radial (derivada)
+        self.parent_branch, self.children = {}, {}    # radial topology, filled by load_case
         self.summary = None
 
     @property

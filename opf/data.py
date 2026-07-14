@@ -1,8 +1,7 @@
-"""Leitura de um exemplo (config.json + devices.json + CSVs) -> Case.
+"""Read an example (config.json + devices.json + CSVs) into a Case.
 
-Os valores sao mantidos em unidades fisicas (kW/kVAr/kWh/ohm/kV); a conversao
-para por-unidade fica a cargo do modelo. As series temporais sao indexadas pelos
-timestamps de demand.csv, que definem o eixo de tempo (periodos e dt).
+Everything stays in physical units (kW/kVAr/kWh/ohm/kV) -- the model does the
+per-unit conversion. The demand.csv timestamps define the time axis (periods, dt).
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ def load_case(path: str | Path) -> Case:
     v_max = float(vlim.get("v_max_pu", 1.05))
     pf_default = float(cfg.get("defaults", {}).get("power_factor", 1.0))
 
-    # ---- eixo de tempo + cargas (demand.csv, formato wide) -------------- #
+    # demand.csv is wide (P2,Q2,P3,Q3,...); split each column into a per-bus series
     dem = (pd.read_csv(path / "demand.csv", parse_dates=["timestamp"])
            .sort_values("timestamp").reset_index(drop=True))
     idx = pd.DatetimeIndex(dem["timestamp"])
@@ -39,14 +38,13 @@ def load_case(path: str | Path) -> Case:
     zero = pd.Series(0.0, index=idx)
     q_ratio = math.tan(math.acos(pf_default))
 
-    # ---- barras --------------------------------------------------------- #
     bus_df = pd.read_csv(path / "bus.csv")
     has_vmin, has_vmax = "v_min_pu" in bus_df.columns, "v_max_pu" in bus_df.columns
     buses: dict[int, Bus] = {}
     for _, r in bus_df.iterrows():
         bid = int(r["bus_id"])
         p = p_load.get(bid, zero.copy())
-        q = q_load.get(bid, p * q_ratio if bid in p_load else zero.copy())
+        q = q_load.get(bid, p * q_ratio if bid in p_load else zero.copy())  # Q from pf if not given
         buses[bid] = Bus(
             id=bid,
             type=str(r["type"]).strip().lower(),
@@ -57,7 +55,6 @@ def load_case(path: str | Path) -> Case:
             q_load_kw=q,
         )
 
-    # ---- ramos ---------------------------------------------------------- #
     br_df = pd.read_csv(path / "branch.csv")
     branches = [
         Branch(int(r["from_bus"]), int(r["to_bus"]),
@@ -65,7 +62,6 @@ def load_case(path: str | Path) -> Case:
         for _, r in br_df.iterrows()
     ]
 
-    # ---- grid ----------------------------------------------------------- #
     g = cfg["grid"]
     grid = Grid(
         bus=int(g["bus"]),
@@ -76,12 +72,10 @@ def load_case(path: str | Path) -> Case:
         feed_in_ratio=float(g.get("feed_in_tariff_ratio", 1.0)),
     )
 
-    # ---- tarifa --------------------------------------------------------- #
     price_df = (pd.read_csv(path / "price.csv", parse_dates=["timestamp"])
                 .sort_values("timestamp"))
     price = pd.Series(price_df["price_per_kwh"].to_numpy(), index=idx)
 
-    # ---- dispositivos --------------------------------------------------- #
     dev = _read_json(path / "devices.json") if (path / "devices.json").exists() else {}
 
     bess = [
@@ -104,6 +98,8 @@ def load_case(path: str | Path) -> Case:
         Pv(
             id=str(d["id"]), bus=int(d["bus"]),
             p_max_kw=float(d["p_max_kw"]),
+            s_max_kva=float(d.get("s_max_kva", d["p_max_kw"])),
+            control=str(d.get("control", "optimal")),
             curtailable=bool(d.get("curtailable", True)),
             power_factor=float(d.get("power_factor", 1.0)),
             avail_kw=_load_profile(path, d["profile"], idx),
@@ -130,9 +126,6 @@ def load_case(path: str | Path) -> Case:
     return case
 
 
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
 def _read_json(p: Path) -> dict:
     with open(p, encoding="utf-8") as f:
         return json.load(f)
@@ -145,7 +138,7 @@ def _infer_dt_hours(idx: pd.DatetimeIndex) -> float:
 
 
 def _load_profile(path: Path, ref: str, idx: pd.DatetimeIndex) -> pd.Series:
-    """Le um perfil 'arquivo.csv:coluna' -> Series alinhada ao eixo de tempo."""
+    """Read a 'file.csv:column' profile, aligned to the time axis."""
     fname, _, col = ref.partition(":")
     df = (pd.read_csv(path / fname, parse_dates=["timestamp"])
           .sort_values("timestamp"))
@@ -161,15 +154,15 @@ def _build_topology(case: Case) -> None:
 
 def _validate(case: Case) -> None:
     if case.n_periods == 0:
-        raise ValueError("Nenhum periodo encontrado em demand.csv")
+        raise ValueError("No periods found in demand.csv")
     non_root = [b for b in case.buses if b != case.root]
     for b in non_root:
         if b not in case.parent_branch:
-            raise ValueError(f"Barra {b} sem ramo de entrada (rede nao radial/conexa?)")
+            raise ValueError(f"Bus {b} has no incoming branch (network not radial/connected?)")
     if len(case.branches) != len(non_root):
         raise ValueError(
-            f"Rede nao radial: {len(case.branches)} ramos para {len(non_root)} "
-            f"barras nao-raiz (esperado igual)."
+            f"Non-radial network: {len(case.branches)} branches for {len(non_root)} "
+            f"non-root buses (expected equal)."
         )
     if not case.buses[case.root].is_slack:
-        raise ValueError(f"Barra raiz {case.root} (grid) deve ser do tipo 'slack'.")
+        raise ValueError(f"Root bus {case.root} (grid) must be of type 'slack'.")

@@ -1,13 +1,13 @@
-"""Facade de alto nivel para a operacao otima de BESS/DERs em distribuicao.
+"""High-level facade for the optimal operation of BESS/DERs in distribution.
 
     from teacher import BessOpt
 
     case = BessOpt("examples/case5").build().solve()
 
     print(case.summary)
-    print(case.bess[0].result.soc_kwh)     # SoC (kWh) por timestamp
-    print(case.grid.result.import_kw)      # importacao da rede (kW)
-    print(case.buses[2].result.v_pu)       # tensao (p.u.) na barra 2
+    print(case.bess[0].result.soc_kwh)     # SoC (kWh) per timestamp
+    print(case.grid.result.import_kw)      # grid import (kW)
+    print(case.buses[2].result.v_pu)       # voltage (p.u.) at bus 2
 """
 from __future__ import annotations
 
@@ -22,13 +22,12 @@ from opf.results import attach_results
 
 
 class BessOpt:
-    def __init__(self, source: str | Path | Case, *, exact_cone: bool = False):
+    def __init__(self, source: str | Path | Case):
         self.case: Case = source if isinstance(source, Case) else load_case(source)
-        self.exact_cone = exact_cone
         self.model: pyo.ConcreteModel | None = None
 
     def build(self) -> "BessOpt":
-        self.model = build_model(self.case, exact_cone=self.exact_cone)
+        self.model = build_model(self.case)
         return self
 
     def solve(self, solver: str = "gurobi_direct", tee: bool = False, **options) -> Case:
@@ -37,8 +36,8 @@ class BessOpt:
         opt = pyo.SolverFactory(solver)
         if opt is None or not opt.available(exception_flag=False):
             raise RuntimeError(
-                f"Solver '{solver}' indisponivel. Para este QCQP convexo use, p.ex., "
-                f"gurobi_direct, ipopt ou scip (ver README)."
+                f"Solver '{solver}' unavailable. This model is a MISOCP; use e.g. "
+                f"gurobi_direct or scip (see README)."
             )
         for k, v in options.items():
             opt.options[k] = v

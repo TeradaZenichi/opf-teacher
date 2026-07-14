@@ -19,7 +19,9 @@
       "id": "pv1",
       "bus": 5,
       "p_max_kw": 260.0,
+      "s_max_kva": 300.0,
       "profile": "pv.csv:PV5",
+      "control": "optimal",
       "curtailable": true,
       "power_factor": 1.0
     }

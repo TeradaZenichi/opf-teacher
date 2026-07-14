@@ -1,8 +1,8 @@
-"""opf-teacher: operacao otima de BESS/DERs em redes de distribuicao.
+"""opf-teacher: optimal operation of BESS/DERs in distribution networks.
 
-Modelo de fluxo de potencia otimo (OPF) para redes radiais de distribuicao
-usando o branch flow model (DistFlow, Baran-Wu) com relaxacao conica (SOCP)
-e aproximacao de tensao fixa v ~ v_nom.
+Optimal power flow (OPF) model for radial distribution networks using the
+branch flow model (DistFlow, Baran-Wu) with a second-order cone relaxation
+(SOCP), the exact rotated cone.
 """
 from opf.components import (
     Base, Bess, Branch, Bus, Case, Grid, Pv, Summary,

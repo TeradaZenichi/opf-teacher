@@ -1,7 +1,7 @@
-"""Extracao da solucao do modelo Pyomo de volta para os componentes do Case.
+"""Pull the Pyomo solution back onto the Case components.
 
-Cada componente (Grid, Bus, Branch, Bess, Pv) recebe um objeto `.result` com as
-series temporais em unidades fisicas (kW/kVAr/kV/kWh), e o Case recebe `.summary`.
+Each component (Grid, Bus, Branch, Bess, Pv) gets a `.result` with time series in
+physical units (kW/kVAr/kV/kWh); the Case gets a `.summary`.
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ def attach_results(m, case: Case, status: str) -> Case:
     def series(values) -> pd.Series:
         return pd.Series(values, index=idx)
 
-    # ---- grid ----------------------------------------------------------- #
     imp = series([base.to_kw(_val(m.pimp[t])) for t in T])
     exp = series([base.to_kw(_val(m.pexp[t])) for t in T])
     cost = (imp - case.grid.feed_in_ratio * exp) * case.price * case.dt_h
@@ -39,13 +38,11 @@ def attach_results(m, case: Case, status: str) -> Case:
         cost=cost,
     )
 
-    # ---- barras (tensao) ------------------------------------------------ #
     for b, bus in case.buses.items():
-        bus.result = BusResult(
+        bus.result = BusResult(  # v is stored squared, so take the root
             v_pu=series([math.sqrt(max(_val(m.v[b, t]), 0.0)) for t in T])
         )
 
-    # ---- ramos ---------------------------------------------------------- #
     for j, branch in ((j, case.branches[case.parent_branch[j]])
                       for j in case.buses if j != case.root):
         r_pu = base.pu_impedance(branch.r_ohm)
@@ -55,7 +52,6 @@ def attach_results(m, case: Case, status: str) -> Case:
             loss_kw=series([base.to_kw(r_pu * _val(m.l[j, t])) for t in T]),
         )
 
-    # ---- BESS ----------------------------------------------------------- #
     for s in case.bess:
         ch = series([base.to_kw(_val(m.pch[s.id, t])) for t in T])
         dis = series([base.to_kw(_val(m.pdis[s.id, t])) for t in T])
@@ -63,21 +59,20 @@ def attach_results(m, case: Case, status: str) -> Case:
         s.result = BessResult(
             charge_kw=ch,
             discharge_kw=dis,
-            p_net_kw=ch - dis,                 # carga (+) / descarga (-)
+            p_net_kw=ch - dis,                 # charge (+) / discharge (-)
             soc_kwh=soc,
             soc_frac=soc / s.e_cap_kwh,
         )
 
-    # ---- PV ------------------------------------------------------------- #
     for g in case.pv:
         gen = series([base.to_kw(_val(m.ppv[g.id, t])) for t in T])
         g.result = PvResult(
             avail_kw=g.avail_kw.copy(),
             gen_kw=gen,
             curtail_kw=g.avail_kw - gen,
+            q_kvar=series([base.to_kw(_val(m.qpv[g.id, t])) for t in T]),
         )
 
-    # ---- resumo --------------------------------------------------------- #
     case.summary = Summary(
         status=status,
         objective_cost=_val(m.cost),

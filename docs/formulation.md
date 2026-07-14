@@ -1,8 +1,8 @@
 # Formulação do problema
 
 Operação ótima de BESS/DERs em rede **radial** de distribuição, via **branch
-flow model (DistFlow, Baran–Wu)** com **relaxação cônica (SOCP)** e aproximação
-de tensão fixa $v \approx 1\,\text{p.u.}$. Tudo em por-unidade na base do sistema.
+flow model (DistFlow, Baran–Wu)** com **relaxação cônica (SOCP)** — o cone
+rotacionado exato $P^2+Q^2 \le v\,\ell$. Tudo em por-unidade na base do sistema.
 
 ## Convenção
 
@@ -90,8 +90,7 @@ $$
 ### Relaxação cônica (SOCP), $\forall (i,j) \in L,\ t \in T$
 
 $$
-P_{ij,t}^2 + Q_{ij,t}^2 \le \ell_{ij,t}
-\qquad\big(\text{exato: } P_{ij,t}^2 + Q_{ij,t}^2 \le v_{i,t}\,\ell_{ij,t}\big)
+P_{ij,t}^2 + Q_{ij,t}^2 \le v_{i,t}\,\ell_{ij,t}
 $$
 
 ### Limites de rede (térmico e tensão)
