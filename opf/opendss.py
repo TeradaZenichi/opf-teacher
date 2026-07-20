@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, replace
 import math
+import os
 from pathlib import Path
 import re
 from typing import Any, Mapping
@@ -61,15 +62,19 @@ def load_opendss_network(
         raise FileNotFoundError(f"OpenDSS master file not found: {master}")
 
     dss = dss if dss is not None else _new_dss()
-    dss.text("clear")
-    dss.text(f'compile "{master}"')
-    _raise_dss_error(dss, master)
-    dss_interface = getattr(dss, "dssinterface", None)
-    if dss_interface is not None and int(getattr(dss_interface, "num_circuits", 1)) == 0:
-        raise RuntimeError(f"OpenDSS did not create a circuit while compiling {master}")
-    # Alguns arquivos não executam CalcVoltageBases no final.
-    dss.text("calcvoltagebases")
-    _raise_dss_error(dss, master)
+    caller_directory = Path.cwd()
+    try:
+        dss.text("clear")
+        dss.text(f'compile "{master}"')
+        _raise_dss_error(dss, master)
+        dss_interface = getattr(dss, "dssinterface", None)
+        if dss_interface is not None and int(getattr(dss_interface, "num_circuits", 1)) == 0:
+            raise RuntimeError(f"OpenDSS did not create a circuit while compiling {master}")
+        # Alguns arquivos não executam CalcVoltageBases no final.
+        dss.text("calcvoltagebases")
+        _raise_dss_error(dss, master)
+    finally:
+        os.chdir(caller_directory)
 
     names = [_bus_name(n) for n in dss.circuit.buses_names]
     if not names:

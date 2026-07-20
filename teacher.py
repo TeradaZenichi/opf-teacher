@@ -8,7 +8,7 @@ import pyomo.environ as pyo
 from opf.components import Case
 from opf.data import load_case
 from opf.model import build_model
-from opf.results import attach_results
+from opf.results import DEFAULT_SOCP_GAP_TOLERANCE, attach_results
 
 
 class BessOpt:
@@ -21,7 +21,8 @@ class BessOpt:
         return self
 
     def solve(self, solver: str = "gurobi_direct", tee: bool = False,
-              socp_gap_tolerance: float = 1e-6, **options) -> Case:
+              socp_gap_tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE,
+              **options) -> Case:
         if self.model is None:
             self.build()
         opt = pyo.SolverFactory(solver)

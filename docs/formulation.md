@@ -24,10 +24,11 @@ v_{j,t} &= |V_{j,t}|^2 &&\text{(squared voltage magnitude)}\\
 P_{ij,t},\ Q_{ij,t} && &\text{(sending-end active and reactive power)}\\
 P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t}
 && &\text{(substation exchange)}\\
-P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ E^{\text{BESS}}_{s,t}
-&& &\text{(BESS charge, discharge, and stored energy)}\\
-P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t}
-&& &\text{(PV active and reactive power)}
+P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ Q^{\text{BESS}}_{s,t},\ E^{\text{BESS}}_{s,t}
+&& &\text{(BESS charge, discharge, reactive power, and energy)}\\
+P^{\text{loss,Q}}_{s,t} && &\text{(incremental BESS inverter loss)}\\
+P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t}
+&& &\text{(PV active power, reactive power, and incremental loss)}
 \end{aligned}
 $$
 
@@ -45,10 +46,14 @@ P^{\text d}_{j,t},\ Q^{\text d}_{j,t} &:\quad\text{active and reactive demand}\\
 \overline E_s,\ \eta^{\text ch}_s,\ \eta^{\text dis}_s,
 \ \text{SoC}^{\text ini}_s,\ \text{SoC}^{\min}_s,\ \text{SoC}^{\max}_s
 &:\quad\text{BESS parameters}\\
-\overline P^{\text ch}_s,\ \overline P^{\text dis}_s
-&:\quad\text{BESS power limits}\\
+\overline P^{\text ch}_s,\ \overline P^{\text dis}_s,\ \overline S^{\text{BESS}}_s
+&:\quad\text{BESS power limits and inverter rating}\\
+\overline P^{\text{loss,Q}}_s
+&:\quad\text{BESS loss at }|Q|=\overline S^{\text{BESS}}_s\\
 P^{\text{PV,av}}_{g,t},\ \overline S^{\text{PV}}_g,\ \tan\varphi_g
 &:\quad\text{PV availability, rating, and fixed-PF ratio}\\
+\overline P^{\text{loss,Q}}_g
+&:\quad\text{PV loss at }|Q|=\overline S^{\text{PV}}_g\\
 \overline P^{\text imp},\ \overline P^{\text exp},\ \overline Q^{\text grid},\ \rho
 &:\quad\text{grid limits and feed-in ratio}\\
 \pi_t,\ S_{\text base} &:\quad\text{energy price and system power base}
@@ -78,6 +83,7 @@ $$
 
 $$
 q^{\text inj}_{j,t}=Q^{\text grid}_{j,t}\big|_{j=r}
++\sum_{s\in S_j}Q^{\text{BESS}}_{s,t}
 +\sum_{g\in G_j}Q^{\text{PV}}_{g,t}-Q^{\text d}_{j,t}.
 $$
 
@@ -138,7 +144,10 @@ $$
 g_{ij,t}=v_{i,t}\ell_{ij,t}-P_{ij,t}^2-Q_{ij,t}^2.
 $$
 
-The reported confidence margin is a numerical diagnostic, not a statistical
+The default scaled-gap tolerance is $10^{-5}$. The report also includes gap
+relative to branch flow, equivalent current error in amperes, and equivalent
+loss error in watts. Tightness is classified as `tight`, `acceptable`, or
+`not_tight`; it is a numerical and physical diagnostic, not a statistical
 probability.
 
 ### Network limits
@@ -156,10 +165,10 @@ E^{\text{BESS}}_{s,t}=
 \begin{cases}
 \text{SoC}^{\text ini}_s\overline E_s+
 \left(\eta^{\text ch}_sP^{\text{BESS,ch}}_{s,t}
--P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s\right)\Delta t,&t=t_0,\\[4pt]
+-P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s-P^{\text{loss,Q}}_{s,t}\right)\Delta t,&t=t_0,\\[4pt]
 E^{\text{BESS}}_{s,t-1}+
 \left(\eta^{\text ch}_sP^{\text{BESS,ch}}_{s,t}
--P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s\right)\Delta t,&t>t_0.
+-P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s-P^{\text{loss,Q}}_{s,t}\right)\Delta t,&t>t_0.
 \end{cases}
 $$
 
@@ -172,6 +181,28 @@ $$
 0\leq P^{\text{BESS,ch}}_{s,t}\leq\overline P^{\text ch}_s,\qquad
 0\leq P^{\text{BESS,dis}}_{s,t}\leq\overline P^{\text dis}_s.
 $$
+
+The BESS inverter rating is enforced by
+
+$$
+\left(P^{\text{BESS,dis}}_{s,t}-P^{\text{BESS,ch}}_{s,t}\right)^2+
+\left(Q^{\text{BESS}}_{s,t}\right)^2\leq
+\left(\overline S^{\text{BESS}}_s\right)^2.
+$$
+
+The incremental reactive-power loss satisfies
+
+$$
+\overline P^{\text{loss,Q}}_s\left(Q^{\text{BESS}}_{s,t}\right)^2
+\leq
+\left(\overline S^{\text{BESS}}_s\right)^2P^{\text{loss,Q}}_{s,t}.
+$$
+
+At $|Q|=\overline S^{\text{BESS}}_s$, the minimum loss is
+$\overline P^{\text{loss,Q}}_s$. This loss drains stored energy.
+
+With `reactive_control: true`, the OPF selects $Q^{\text{BESS}}_{s,t}$. When
+the option is omitted or false, $Q^{\text{BESS}}_{s,t}=0$.
 
 If cyclic operation is enabled:
 
@@ -186,14 +217,31 @@ for discharging.
 ### PV inverter
 
 $$
-0\leq P^{\text{PV}}_{g,t}\leq P^{\text{PV,av}}_{g,t}
+P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}
+\leq P^{\text{PV,av}}_{g,t}
 $$
+
+Equality is used for a non-curtailable PV inverter.
 
 $$
 \left(P^{\text{PV}}_{g,t}\right)^2+
 \left(Q^{\text{PV}}_{g,t}\right)^2\leq
 \left(\overline S^{\text{PV}}_g\right)^2.
 $$
+
+$$
+\overline P^{\text{loss,Q}}_g\left(Q^{\text{PV}}_{g,t}\right)^2
+\leq
+\left(\overline S^{\text{PV}}_g\right)^2P^{\text{loss,Q}}_{g,t}.
+$$
+
+For PV, reactive-power loss consumes part of the available solar power. The
+model does not include grid-powered night-VAR operation, so a positive rated
+loss prevents reactive support when $P^{\text{PV,av}}_{g,t}=0$.
+
+Both loss relations are convex epigraphs. With positive energy prices, cost
+minimization also minimizes $P^{\text{loss,Q}}$, so the inequalities are tight
+at the optimum.
 
 For `fixed_pf`, $Q^{\text{PV}}_{g,t}=\tan\varphi_gP^{\text{PV}}_{g,t}$.
 The other supported modes are `optimal`, `volt-var`, `volt-watt`, and

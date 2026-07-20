@@ -123,6 +123,12 @@ def load_case(path: str | Path) -> Case:
             soc_min_frac=float(d.get("soc_min_frac", 0.0)),
             soc_max_frac=float(d.get("soc_max_frac", 1.0)),
             cyclic_soc=bool(d.get("cyclic_soc", True)),
+            s_max_kva=float(d.get(
+                "s_max_kva",
+                max(float(d["p_charge_max_kw"]), float(d["p_discharge_max_kw"])),
+            )),
+            reactive_control=bool(d.get("reactive_control", False)),
+            q_loss_rated_kw=float(d.get("q_loss_rated_kw", 0.0)),
         )
         for d in dev.get("bess", [])
     ]
@@ -136,6 +142,7 @@ def load_case(path: str | Path) -> Case:
             curtailable=bool(d.get("curtailable", True)),
             power_factor=float(d.get("power_factor", 1.0)),
             avail_kw=_load_profile(path, d["profile"], idx),
+            q_loss_rated_kw=float(d.get("q_loss_rated_kw", 0.0)),
         )
         for d in dev.get("pv", [])
     ]
@@ -194,6 +201,14 @@ def _validate(case: Case) -> None:
             raise ValueError(
                 f"Device {device.id!r} references bus {device.bus}, which is not in the network"
             )
+    for device in case.bess:
+        if device.s_max_kva <= 0.0:
+            raise ValueError(f"BESS {device.id!r} must have a positive s_max_kva")
+        if device.q_loss_rated_kw < 0.0:
+            raise ValueError(f"BESS {device.id!r} cannot have negative q_loss_rated_kw")
+    for device in case.pv:
+        if device.q_loss_rated_kw < 0.0:
+            raise ValueError(f"PV {device.id!r} cannot have negative q_loss_rated_kw")
     non_root = [b for b in case.buses if b != case.root]
     for b in non_root:
         if b not in case.parent_branch:

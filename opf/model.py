@@ -36,6 +36,9 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     pv_qratio = {g.id: math.tan(math.acos(g.power_factor)) for g in case.pv}
     pv_s = {g.id: base.pu_power(g.s_max_kva) for g in case.pv}
     pv_ctrl = {g.id: g.control for g in case.pv}
+    bess_s = {s.id: base.pu_power(s.s_max_kva) for s in case.bess}
+    bess_q_loss = {s.id: base.pu_power(s.q_loss_rated_kw) for s in case.bess}
+    pv_q_loss = {g.id: base.pu_power(g.q_loss_rated_kw) for g in case.pv}
 
     m.T = pyo.Set(initialize=T, ordered=True)
     m.B = pyo.Set(initialize=list(case.buses))
@@ -66,6 +69,15 @@ def build_model(case: Case) -> pyo.ConcreteModel:
                     bounds=lambda m, s, t: (0.0, base.pu_power(bess[s].p_charge_max_kw)))
     m.pdis = pyo.Var(m.S, m.T, domain=pyo.NonNegativeReals,
                      bounds=lambda m, s, t: (0.0, base.pu_power(bess[s].p_discharge_max_kw)))
+    m.qbess = pyo.Var(m.S, m.T, bounds=lambda m, s, t: (
+        -bess_s[s] if bess[s].reactive_control else 0.0,
+        bess_s[s] if bess[s].reactive_control else 0.0,
+    ))
+    m.pbess_loss = pyo.Var(m.S, m.T, domain=pyo.NonNegativeReals,
+                           bounds=lambda m, s, t: (
+                               0.0,
+                               bess_q_loss[s] if bess[s].reactive_control else 0.0,
+                           ))
     m.soc = pyo.Var(m.S, m.T, bounds=lambda m, s, t: (
         bess[s].soc_min_frac * base.pu_energy(bess[s].e_cap_kwh),
         bess[s].soc_max_frac * base.pu_energy(bess[s].e_cap_kwh),
@@ -75,9 +87,11 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         avail = pv_avail[g][t]
         if pv_droop.is_droop(pv_ctrl[g]):
             return pv_droop.ppv_bounds(avail)
-        return pv_optimal.ppv_bounds(avail, pv[g].curtailable)
+        return (0.0, avail)
     m.ppv = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals, bounds=ppv_bounds)
     m.qpv = pyo.Var(m.G, m.T, bounds=lambda m, g, t: (-pv_s[g], pv_s[g]))
+    m.ppv_loss = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals,
+                         bounds=lambda m, g, t: (0.0, pv_q_loss[g]))
 
     def inj_p(m, b, t):
         expr = -pL[b][t]
@@ -91,6 +105,8 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def inj_q(m, b, t):
         expr = -qL[b][t]
+        for s in bess_at[b]:
+            expr += m.qbess[s.id, t]
         for g in pv_at[b]:
             expr += m.qpv[g.id, t]
         if b == case.root:
@@ -122,6 +138,27 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         return m.ppv[g, t] ** 2 + m.qpv[g, t] ** 2 <= pv_s[g] ** 2
     m.pv_capability = pyo.Constraint(m.G, m.T, rule=pv_capability)
 
+    def pv_available_power(m, g, t):
+        used = m.ppv[g, t] + m.ppv_loss[g, t]
+        if pv[g].curtailable or pv_droop.is_droop(pv_ctrl[g]):
+            return used <= pv_avail[g][t]
+        return used == pv_avail[g][t]
+    m.pv_available_power = pyo.Constraint(m.G, m.T, rule=pv_available_power)
+
+    def pv_q_loss_rule(m, g, t):
+        return pv_q_loss[g] * m.qpv[g, t] ** 2 <= pv_s[g] ** 2 * m.ppv_loss[g, t]
+    m.pv_q_loss = pyo.Constraint(m.G, m.T, rule=pv_q_loss_rule)
+
+    def bess_capability(m, s, t):
+        p_net = m.pdis[s, t] - m.pch[s, t]
+        return p_net ** 2 + m.qbess[s, t] ** 2 <= bess_s[s] ** 2
+    m.bess_capability = pyo.Constraint(m.S, m.T, rule=bess_capability)
+
+    def bess_q_loss_rule(m, s, t):
+        return (bess_q_loss[s] * m.qbess[s, t] ** 2
+                <= bess_s[s] ** 2 * m.pbess_loss[s, t])
+    m.bess_q_loss = pyo.Constraint(m.S, m.T, rule=bess_q_loss_rule)
+
     pv_optimal.add(m, pv, pv_ctrl, pv_qratio, T)
     pv_droop.add(m, pv, pv_ctrl, pv_s, pv_avail, T)
 
@@ -131,7 +168,9 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def soc_rule(m, s, t):
         d = bess[s]
-        gain = (d.eta_charge * m.pch[s, t] - m.pdis[s, t] / d.eta_discharge) * dt
+        gain = (d.eta_charge * m.pch[s, t]
+                - m.pdis[s, t] / d.eta_discharge
+                - m.pbess_loss[s, t]) * dt
         soc0 = d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
         prev = soc0 if t == T[0] else m.soc[s, T[T.index(t) - 1]]
         return m.soc[s, t] == prev + gain

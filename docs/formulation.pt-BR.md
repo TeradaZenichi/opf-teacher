@@ -25,8 +25,11 @@ v_{j,t} &= |V_{j,t}|^2 &&\text{(tensão ao quadrado)}\\
 \ell_{ij,t} &= |I_{ij,t}|^2 &&\text{(corrente ao quadrado no ramo } i\!\to\! j)\\
 P_{ij,t},\ Q_{ij,t} && &\text{(fluxos ativo/reativo no extremo emissor)}\\
 P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t} && &\text{(importação/exportação/reativo da rede na subestação)}\\
-P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ E^{\text{BESS}}_{s,t} && &\text{(carga/descarga/energia do BESS } s)\\
-P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t} && &\text{(potências ativa e reativa do PV } g)
+P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ Q^{\text{BESS}}_{s,t},\ E^{\text{BESS}}_{s,t}
+&& &\text{(carga, descarga, reativo e energia do BESS } s)\\
+P^{\text{loss,Q}}_{s,t} && &\text{(perda incremental do inversor BESS)}\\
+P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t}
+&& &\text{(potências ativa, reativa e perda incremental do PV)}
 \end{aligned}
 $$
 
@@ -45,10 +48,14 @@ P^{\text d}_{j,t},\ Q^{\text d}_{j,t}
 \overline E_s,\ \eta^{\text ch}_s,\ \eta^{\text dis}_s,
 \ \text{SoC}^{\text ini}_s,\ \text{SoC}^{\min}_s,\ \text{SoC}^{\max}_s
 &:\quad \text{parâmetros do BESS}\\
-\overline P^{\text ch}_s,\ \overline P^{\text dis}_s
-&:\quad \text{limites de potência do BESS}\\
+\overline P^{\text ch}_s,\ \overline P^{\text dis}_s,\ \overline S^{\text{BESS}}_s
+&:\quad \text{limites de potência e capacidade do inversor BESS}\\
+\overline P^{\text{loss,Q}}_s
+&:\quad \text{perda BESS em }|Q|=\overline S^{\text{BESS}}_s\\
 P^{\text{PV,av}}_{g,t},\ \overline S^{\text{PV}}_g,\ \tan\varphi_g
 &:\quad \text{disponibilidade, potência aparente e razão Q/P do PV}\\
+\overline P^{\text{loss,Q}}_g
+&:\quad \text{perda PV em }|Q|=\overline S^{\text{PV}}_g\\
 \overline P^{\text imp},\ \overline P^{\text exp},\ \overline Q^{\text grid},\ \rho
 &:\quad \text{limites da rede e razão de remuneração da exportação}\\
 \pi_t,\ S_{\text base} &:\quad \text{tarifa e base de potência do sistema}
@@ -78,6 +85,7 @@ $$
 $$
 q^{\text{inj}}_{j,t} =
 Q^{\text{grid}}_{j,t}\big|_{j=r}
++ \sum_{s \in S_j} Q^{\text{BESS}}_{s,t}
 + \sum_{g \in G_j} Q^{\text{PV}}_{g,t}
 - Q^{\text{d}}_{j,t}
 $$
@@ -132,7 +140,10 @@ $$
 
 O código reporta o maior valor absoluto e uma versão normalizada. O critério é
 atendido quando o maior resíduo normalizado não supera a tolerância configurada.
-Essa margem é um diagnóstico numérico, não uma probabilidade estatística.
+A tolerância padrão é $10^{-5}$. Também são reportados o gap relativo ao fluxo,
+o erro equivalente de corrente em ampères e o erro equivalente de perdas em
+watts. A classificação é `tight`, `acceptable` ou `not_tight`; trata-se de um
+diagnóstico numérico e físico, não de uma probabilidade estatística.
 
 ### Limites de rede (térmico e tensão)
 
@@ -147,8 +158,8 @@ $$
 $$
 E^{\text{BESS}}_{s,t} =
 \begin{cases}
-\text{SoC}^{\text{ini}}_s\, \overline{E}_s + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s\big)\Delta t, & t = t_0\\[4pt]
-E^{\text{BESS}}_{s,t-1} + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s\big)\Delta t, & t > t_0
+\text{SoC}^{\text{ini}}_s\, \overline{E}_s + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s-P^{\text{loss,Q}}_{s,t}\big)\Delta t, & t = t_0\\[4pt]
+E^{\text{BESS}}_{s,t-1} + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s-P^{\text{loss,Q}}_{s,t}\big)\Delta t, & t > t_0
 \end{cases}
 $$
 
@@ -162,11 +173,34 @@ $$
 0 \le P^{\text{BESS,dis}}_{s,t} \le \overline{P}^{\text{dis}}_s
 $$
 
+O inversor do BESS respeita:
+
+$$
+\left(P^{\text{BESS,dis}}_{s,t}-P^{\text{BESS,ch}}_{s,t}\right)^2+
+\left(Q^{\text{BESS}}_{s,t}\right)^2\le
+\left(\overline S^{\text{BESS}}_s\right)^2.
+$$
+
+A perda incremental causada por $Q$ é limitada por:
+
+$$
+\overline P^{\text{loss,Q}}_s\left(Q^{\text{BESS}}_{s,t}\right)^2
+\leq
+\left(\overline S^{\text{BESS}}_s\right)^2P^{\text{loss,Q}}_{s,t}.
+$$
+
+Logo, em $|Q|=\overline S^{\text{BESS}}_s$, a perda mínima é
+$\overline P^{\text{loss,Q}}_s$. Essa perda drena a energia armazenada.
+
+Com `reactive_control: true`, $Q^{\text{BESS}}_{s,t}$ é escolhido pelo OPF.
+Quando a opção é omitida ou falsa, $Q^{\text{BESS}}_{s,t}=0$.
+
 ### PV, $\forall g \in G,\ t \in T$
 
 $$
-0 \le P^{\text{PV}}_{g,t} \le P^{\text{PV,av}}_{g,t}
-\qquad(\text{ou } P^{\text{PV}}_{g,t} = P^{\text{PV,av}}_{g,t} \text{ se não-curtailável})
+P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}
+\leq P^{\text{PV,av}}_{g,t}
+\qquad(\text{igualdade se não-curtailável})
 $$
 
 $$
@@ -174,6 +208,20 @@ $$
 \left(Q^{\text{PV}}_{g,t}\right)^2\le
 \left(\overline S^{\text{PV}}_g\right)^2.
 $$
+
+$$
+\overline P^{\text{loss,Q}}_g\left(Q^{\text{PV}}_{g,t}\right)^2
+\leq
+\left(\overline S^{\text{PV}}_g\right)^2P^{\text{loss,Q}}_{g,t}.
+$$
+
+No PV, a perda reativa consome parte da potência solar disponível. Como o
+modelo não representa operação noturna alimentada pela rede, uma perda nominal
+positiva impede suporte reativo quando $P^{\text{PV,av}}_{g,t}=0$.
+
+As duas relações de perda são epígrafes convexas. Com tarifas de energia
+positivas, minimizar o custo também minimiza $P^{\text{loss,Q}}$, fazendo as
+desigualdades atuarem como igualdades na solução ótima.
 
 No modo `fixed_pf`, $Q^{\text{PV}}_{g,t}=\tan\varphi_gP^{\text{PV}}_{g,t}$.
 Os demais modos são `optimal`, `volt-var`, `volt-watt` e `volt-var-watt`.

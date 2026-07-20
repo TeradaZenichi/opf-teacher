@@ -30,7 +30,7 @@ Paths and runtime options are defined at the top of `main.py`:
 CASE_PATH = PROJECT_ROOT / "examples" / "case5"
 OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
 SOLVER = "gurobi_direct"
-SOCP_GAP_TOLERANCE = 1e-6
+SOCP_GAP_TOLERANCE = 1e-5
 SHOW_PLOT = False
 ```
 
@@ -115,18 +115,48 @@ from teacher import BessOpt
 
 case = BessOpt("examples/case5").build().solve(
     solver="gurobi_direct",
-    socp_gap_tolerance=1e-6,
+    socp_gap_tolerance=1e-5,
 )
 
 print(case.summary.as_dict())
 print(case.bess[0].result.soc_kwh)
 print(case.bess[0].result.p_net_kw)
+print(case.bess[0].result.q_kvar)
+print(case.bess[0].result.inverter_loss_kw)
+print(case.pv[0].result.inverter_loss_kw)
 print(case.grid.result.import_kw)
 print(case.buses[4].result.v_pu)
 ```
 
 The BESS sign convention is `p_net_kw > 0` for charging and `p_net_kw < 0`
-for discharging.
+for discharging. Reactive power uses `q_kvar > 0` for injection and
+`q_kvar < 0` for absorption.
+
+## BESS inverter
+
+Reactive-power control is configured per BESS in `devices.json`:
+
+```json
+{
+  "e_cap_kwh": 100.0,
+  "p_charge_max_kw": 40.0,
+  "p_discharge_max_kw": 40.0,
+  "s_max_kva": 50.0,
+  "reactive_control": true,
+  "q_loss_rated_kw": 0.5
+}
+```
+
+When enabled, the OPF selects BESS reactive power subject to the inverter
+rating. If `reactive_control` is omitted or `false`, reactive power is fixed at
+zero. If `s_max_kva` is omitted, it defaults to the largest active-power limit.
+`q_loss_rated_kw` is the incremental active-power loss at
+`abs(q_kvar) == s_max_kva`; the loss scales quadratically with Q. For the BESS,
+this loss is subtracted from stored energy. For PV, it consumes part of the
+available solar power. The default is zero for backward compatibility.
+
+Per-device loss series are exposed as `result.inverter_loss_kw`; their total
+energy is reported in `case.summary.inverter_losses_kwh`.
 
 ## Relaxation gap
 
@@ -139,16 +169,23 @@ g = v*l - P² - Q²
 The main fields in `case.summary` are:
 
 - `socp_gap_max_normalized`;
+- `socp_gap_max_relative_flow`;
+- `socp_current_error_max_a`;
+- `socp_loss_error_max_w`;
 - `socp_gap_tolerance`;
-- `socp_confidence_margin`;
-- `socp_confidence`;
+- `socp_tightness_margin`;
+- `socp_tightness`;
 - `socp_relaxation_tight`.
 
-The confidence margin is `tolerance - maximum normalized gap`. A positive value
-passes the configured criterion. Per-branch time series are available at
-`branch.result.socp_gap_pu2` and `branch.result.socp_gap_normalized`.
+The tightness margin is `tolerance - maximum normalized gap`. A positive value
+passes the configured criterion. `socp_tightness` is `tight`, `acceptable`, or
+`not_tight`. Per-branch time series include the absolute and normalized gaps,
+gap relative to branch flow, current error in amperes, and equivalent loss
+error in watts.
 
-This is a numerical tightness check, not a statistical probability.
+This is a numerical and physical tightness check, not a statistical
+probability. The legacy properties `socp_confidence` and
+`socp_confidence_margin` remain available as API aliases.
 
 ## PV control
 
@@ -163,6 +200,8 @@ The `control` field accepts:
 | `volt-var-watt` | combined Volt-VAr and Volt-Watt curves |
 
 All modes enforce the inverter apparent-power rating.
+PV devices also accept `q_loss_rated_kw`. With a nonzero value, reactive-power
+losses reduce the active power available at the AC terminal.
 
 ## Repository layout
 

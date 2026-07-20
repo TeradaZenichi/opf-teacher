@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pyomo.environ as pyo
+
 from opf.data import load_case
 from opf.model import build_model
 from opf.opendss import load_opendss_network, resolve_bus_id
@@ -140,7 +142,11 @@ class OpenDSSImporterTest(unittest.TestCase):
         self.assertEqual(case.bus_name_to_id["bus_002"], 2)
         self.assertEqual(case.grid.bus, 1)
         self.assertEqual(case.bess[0].bus, 2)
+        self.assertEqual(case.bess[0].s_max_kva, 2.0)
+        self.assertFalse(case.bess[0].reactive_control)
+        self.assertEqual(case.bess[0].q_loss_rated_kw, 0.0)
         self.assertEqual(case.pv[0].bus, 3)
+        self.assertEqual(case.pv[0].q_loss_rated_kw, 0.0)
         self.assertEqual(case.buses[2].name, "bus_002")
         self.assertEqual(case.buses[2].phases, (1, 2, 3))
         self.assertTrue(math.isclose(case.branches[0].r_ohm, 0.01575))
@@ -148,10 +154,15 @@ class OpenDSSImporterTest(unittest.TestCase):
         self.assertEqual(case.branches[0].length_units, 3)
         model = build_model(case)
         self.assertEqual(model.nobjectives(), 1)
+        self.assertEqual(model.qbess["b1", 0].bounds, (0.0, 0.0))
+        self.assertEqual(model.pbess_loss["b1", 0].bounds, (0.0, 0.0))
+        self.assertEqual(model.ppv_loss["pv1", 0].bounds, (0.0, 0.0))
 
     def test_real_opendss_fixture(self):
         master = Path(__file__).parent / "fixtures" / "opendss" / "Master.dss"
+        caller_directory = Path.cwd()
         network = load_opendss_network(master, slack_bus="bus_001")
+        self.assertEqual(Path.cwd(), caller_directory)
         self.assertEqual(len(network.buses), 3)
         self.assertEqual(len(network.branches), 2)
         self.assertAlmostEqual(network.branches[0].r_ohm, 0.63 * 0.025, places=6)
@@ -225,8 +236,33 @@ class Case5Test(unittest.TestCase):
             self.assertAlmostEqual(branch.r_ohm, r)
             self.assertAlmostEqual(branch.x_ohm, x)
             self.assertAlmostEqual(branch.s_max_kva, s_max)
-        self.assertEqual(model.nvariables(), 600)
-        self.assertEqual(model.nconstraints(), 481)
+        bess = case.bess[0]
+        self.assertTrue(bess.reactive_control)
+        self.assertEqual(bess.e_cap_kwh, 100.0)
+        self.assertEqual(bess.s_max_kva, 50.0)
+        self.assertEqual(bess.q_loss_rated_kw, 0.5)
+        self.assertEqual(case.pv[0].q_loss_rated_kw, 3.0)
+        self.assertEqual(model.qbess[bess.id, 0].bounds, (-0.05, 0.05))
+        self.assertEqual(model.pbess_loss[bess.id, 0].bounds, (0.0, 0.0005))
+        self.assertEqual(model.nvariables(), 672)
+        self.assertEqual(model.nconstraints(), 577)
+
+    def test_reactive_losses_follow_rated_quadratic_curve_and_drain_soc(self):
+        case = load_case("examples/case5")
+        model = build_model(case)
+
+        model.qbess["b1", 0].set_value(0.025)
+        model.pbess_loss["b1", 0].set_value(0.000125)
+        self.assertAlmostEqual(pyo.value(model.bess_q_loss["b1", 0].body), 0.0)
+
+        model.qpv["pv1", 0].set_value(0.15)
+        model.ppv_loss["pv1", 0].set_value(0.00075)
+        self.assertAlmostEqual(pyo.value(model.pv_q_loss["pv1", 0].body), 0.0)
+
+        model.pch["b1", 0].set_value(0.0)
+        model.pdis["b1", 0].set_value(0.0)
+        model.soc["b1", 0].set_value(0.05 - 0.000125)
+        self.assertAlmostEqual(pyo.value(model.soc_balance["b1", 0].body), 0.0)
 
 
 class TransformerCaseTest(unittest.TestCase):
@@ -290,15 +326,19 @@ class SocpGapTest(unittest.TestCase):
 
         tight = analyze_socp_gap(model, case, tolerance=1e-6)
         self.assertTrue(tight["relaxation_tight"])
-        self.assertEqual(tight["confidence"], "high")
-        self.assertGreater(tight["confidence_margin"], 0.0)
+        self.assertEqual(tight["tightness"], "tight")
+        self.assertGreater(tight["tightness_margin"], 0.0)
+        self.assertEqual(tight["max_current_error_a"], 0.0)
 
         model.l[2, 0].set_value(1e-3)
         loose = analyze_socp_gap(model, case, tolerance=1e-6)
         self.assertFalse(loose["relaxation_tight"])
-        self.assertEqual(loose["confidence"], "low")
-        self.assertLess(loose["confidence_margin"], 0.0)
+        self.assertEqual(loose["tightness"], "not_tight")
+        self.assertLess(loose["tightness_margin"], 0.0)
         self.assertAlmostEqual(loose["max_normalized"], 1e-3)
+        self.assertAlmostEqual(loose["max_relative_flow"], 1.0)
+        self.assertGreater(loose["max_current_error_a"], 0.0)
+        self.assertGreater(loose["max_loss_error_w"], 0.0)
 
     def test_gap_tolerance_must_be_positive(self):
         case_path = Path(__file__).parent / "fixtures" / "transformer_case"

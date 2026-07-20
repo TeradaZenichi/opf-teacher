@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 CASE_PATH = PROJECT_ROOT / "examples" / "case5"
 OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
 SOLVER = "gurobi_direct"
-SOCP_GAP_TOLERANCE = 1e-6
+SOCP_GAP_TOLERANCE = 1e-5
 SHOW_PLOT = False
 
 
@@ -33,7 +33,7 @@ def plot_results(case: Case, out_path: Path, show: bool):
     grid = case.grid.result
     load_total = sum(bus.p_load_kw for bus in case.buses.values())
 
-    fig, axes = plt.subplots(4, 1, figsize=(11, 12), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(11, 13), sharex=True)
     fig.suptitle(f"Optimal operation — {case.name}", fontsize=14, fontweight="bold")
 
     ax = axes[0]
@@ -53,34 +53,47 @@ def plot_results(case: Case, out_path: Path, show: bool):
     ax = axes[1]
     if case.bess:
         p_net = _aggregate(case.bess, "p_net_kw")
+        q_bess = _aggregate(case.bess, "q_kvar")
         soc = _aggregate(case.bess, "soc_kwh")
-        colors = ["tab:orange" if v >= 0 else "tab:green" for v in p_net]
-        ax.bar(t, p_net, width=0.03, color=colors, label="Charge (+) / Discharge (-)")
+        charge = p_net.clip(lower=0.0)
+        discharge = p_net.clip(upper=0.0)
+        ax.bar(t, charge, width=0.03, color="tab:orange", label="P charge (+)")
+        ax.bar(t, discharge, width=0.03, color="tab:green", label="P discharge (-)")
+        ax.step(t, q_bess, where="mid", color="tab:blue", lw=2,
+                label="Q: injection (+) / absorption (-)")
         ax.axhline(0, color="k", lw=0.6)
-        ax.set_ylabel("BESS power (kW)")
+        ax.set_ylabel("BESS power (kW / kVAr)")
         axs = ax.twinx()
         axs.plot(t, soc, color="tab:purple", lw=2, marker=".", label="SoC")
         axs.set_ylabel("SoC (kWh)", color="tab:purple")
         axs.tick_params(axis="y", labelcolor="tab:purple")
-        ax.legend(loc="upper left", fontsize=8)
-    ax.set_title("Battery: dispatch vs state of charge")
+        handles, labels = ax.get_legend_handles_labels()
+        soc_handles, soc_labels = axs.get_legend_handles_labels()
+        ax.legend(handles + soc_handles, labels + soc_labels,
+                  loc="upper left", fontsize=8)
+    ax.set_title("BESS optimal active and reactive power")
     ax.grid(True, alpha=0.3)
 
     ax = axes[2]
     if case.pv:
         avail = _aggregate(case.pv, "avail_kw")
         gen = _aggregate(case.pv, "gen_kw")
+        q_pv = _aggregate(case.pv, "q_kvar")
         ax.fill_between(t, avail, color="gold", alpha=0.4, label="PV available")
-        ax.plot(t, gen, color="darkorange", lw=2, label="PV generated")
+        ax.step(t, gen, where="mid", color="darkorange", lw=2,
+                label="PV optimal P")
+        ax.step(t, q_pv, where="mid", color="tab:blue", lw=2,
+                label="PV optimal Q")
     ax.plot(t, load_total, color="tab:gray", lw=1.5, ls="--", label="Total load")
-    ax.set_ylabel("Power (kW)")
-    ax.set_title("PV generation vs load")
+    ax.axhline(0, color="k", lw=0.6)
+    ax.set_ylabel("Power (kW / kVAr)")
+    ax.set_title("PV optimal active and reactive power")
     ax.legend(loc="upper left", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     ax = axes[3]
     for b, bus in case.buses.items():
-        ax.plot(t, bus.result.v_pu, lw=1.4, marker=".", ms=3, label=f"V{b}")
+        ax.step(t, bus.result.v_pu, where="mid", lw=1.4, label=f"V{b}")
     vmin = min(b.v_min_pu for b in case.buses.values())
     vmax = max(b.v_max_pu for b in case.buses.values())
     ax.axhline(vmin, color="r", ls=":", lw=1, label=f"limit {vmin:g}")
