@@ -1,0 +1,11 @@
+! R1 e X1 sao valores totais; por isso Length=1.
+Clear
+New Circuit.case5 phases=3 bus1=bus_001.1.2.3 basekV=11 pu=1 frequency=60
+
+New Line.line_001_002 phases=3 bus1=bus_001.1.2.3 bus2=bus_002.1.2.3 length=1 units=none R1=1.0 X1=2.0 R0=1.0 X0=2.0 C1=0 C0=0 NormAmps=78.7295821622217
+New Line.line_002_003 phases=3 bus1=bus_002.1.2.3 bus2=bus_003.1.2.3 length=1 units=none R1=2.0 X1=3.0 R0=2.0 X0=3.0 C1=0 C0=0 NormAmps=52.4863881081478
+New Line.line_003_004 phases=3 bus1=bus_003.1.2.3 bus2=bus_004.1.2.3 length=1 units=none R1=2.4 X1=3.2 R0=2.4 X0=3.2 C1=0 C0=0 NormAmps=31.4918328648887
+New Line.line_002_005 phases=3 bus1=bus_002.1.2.3 bus2=bus_005.1.2.3 length=1 units=none R1=2.0 X1=2.6 R0=2.0 X0=2.6 C1=0 C0=0 NormAmps=41.9891104865182
+
+Set VoltageBases=[11]
+CalcVoltageBases

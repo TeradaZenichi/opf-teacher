@@ -1,12 +1,4 @@
-"""DistFlow (Baran-Wu) branch-flow model with the SOCP relaxation, in Pyomo.
-
-Physical parameters from the Case are converted to per-unit here. Variables:
-    v[b,t] = |V_b|^2   squared voltage
-    l[j,t] = |I_j|^2   squared current on the branch entering bus j
-    P[j,t], Q[j,t]     sending-end flows on branch i->j
-
-Cone: P^2 + Q^2 <= v_i * l  (exact rotated SOC).
-"""
+"""Modelo DistFlow com relaxação SOCP."""
 from __future__ import annotations
 
 import math
@@ -23,11 +15,13 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     base = case.base
     dt = case.dt_h
     T = list(case.periods)
-    NR = [b for b in case.buses if b != case.root]   # non-root buses; each indexes its incoming branch
+    NR = [b for b in case.buses if b != case.root]
 
     br = {j: case.branches[case.parent_branch[j]] for j in NR}
-    R = {j: base.pu_impedance(br[j].r_ohm) for j in NR}
-    X = {j: base.pu_impedance(br[j].x_ohm) for j in NR}
+    RX = {j: br[j].impedance_pu(base, case.buses[br[j].from_bus]) for j in NR}
+    R = {j: RX[j][0] for j in NR}
+    X = {j: RX[j][1] for j in NR}
+    TAP = {j: br[j].tap_ratio for j in NR}
     L_MAX = {j: base.pu_power(br[j].s_max_kva) ** 2 for j in NR}
 
     pL = {b: base.pu_power(case.buses[b].p_load_kw.to_numpy()) for b in case.buses}
@@ -49,7 +43,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.S = pyo.Set(initialize=list(bess))
     m.G = pyo.Set(initialize=list(pv))
 
-    # Volt-Watt relaxes the hard voltage cap so the curve, not the box, holds the overvoltage.
+    # Volt-Watt usa o limite emergencial de tensão definido em pv_droop.
     v_relax = pv_droop.relaxes_voltage(case)
     def v_bounds(m, b, t):
         if b == case.root:
@@ -85,7 +79,6 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.ppv = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals, bounds=ppv_bounds)
     m.qpv = pyo.Var(m.G, m.T, bounds=lambda m, g, t: (-pv_s[g], pv_s[g]))
 
-    # net nodal injection (generation positive); grid appears only at the root
     def inj_p(m, b, t):
         expr = -pL[b][t]
         for s in bess_at[b]:
@@ -104,7 +97,6 @@ def build_model(case: Case) -> pyo.ConcreteModel:
             expr += m.qgrid[t]
         return expr
 
-    # DistFlow balance: inflow minus branch loss, plus injection, equals outflow to children
     def bal_p(m, b, t):
         out = sum(m.P[k, t] for k in case.children.get(b, []))
         incoming = (m.P[b, t] - R[b] * m.l[b, t]) if b != case.root else 0.0
@@ -119,18 +111,19 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def vdrop(m, j, t):
         i = br[j].from_bus
-        return (m.v[j, t] == m.v[i, t]
+        # A impedância do trafo é referida ao lado de envio; em linhas TAP=1.
+        return (m.v[j, t] == TAP[j] ** 2 * (
+                m.v[i, t]
                 - 2.0 * (R[j] * m.P[j, t] + X[j] * m.Q[j, t])
-                + (R[j] ** 2 + X[j] ** 2) * m.l[j, t])
+                + (R[j] ** 2 + X[j] ** 2) * m.l[j, t]))
     m.voltage_drop = pyo.Constraint(m.J, m.T, rule=vdrop)
 
-    # inverter rating, every mode
     def pv_capability(m, g, t):
         return m.ppv[g, t] ** 2 + m.qpv[g, t] ** 2 <= pv_s[g] ** 2
     m.pv_capability = pyo.Constraint(m.G, m.T, rule=pv_capability)
 
-    pv_optimal.add(m, pv, pv_ctrl, pv_qratio, T)     # optimal / fixed_pf
-    pv_droop.add(m, pv, pv_ctrl, pv_s, pv_avail, T)  # volt-var / volt-watt
+    pv_optimal.add(m, pv, pv_ctrl, pv_qratio, T)
+    pv_droop.add(m, pv, pv_ctrl, pv_s, pv_avail, T)
 
     def cone(m, j, t):
         return m.P[j, t] ** 2 + m.Q[j, t] ** 2 <= m.v[br[j].from_bus, t] * m.l[j, t]
@@ -151,7 +144,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         return m.soc[s, T[-1]] == d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
     m.soc_terminal = pyo.Constraint(m.S, rule=soc_cyclic)
 
-    # SOS1 forbids simultaneous import+export (the round-trip is a tie when feed_in=1), no binary needed
+    # Evita importação e exportação simultâneas sem variável binária.
     def no_roundtrip(m, t):
         return [m.pimp[t], m.pexp[t]]
     m.no_roundtrip = pyo.SOSConstraint(m.T, rule=no_roundtrip, sos=1)

@@ -1,144 +1,215 @@
-# Formulação do problema
+# OPF formulation
 
-Operação ótima de BESS/DERs em rede **radial** de distribuição, via **branch
-flow model (DistFlow, Baran–Wu)** com **relaxação cônica (SOCP)** — o cone
-rotacionado exato $P^2+Q^2 \le v\,\ell$. Tudo em por-unidade na base do sistema.
+[Versão em português](formulation.pt-BR.md)
 
-## Convenção
+Optimal operation of BESS and distributed energy resources in a radial
+distribution network using the DistFlow model with an SOCP relaxation. All
+electrical quantities are represented in per unit.
 
-- Barras $i, j \in B$; ramo $(i,j) \in L$ orientado do pai $i$ para o filho $j$
-  (rede radial: cada barra $\neq r$ tem exatamente um ramo de entrada).
-- Tempo $t \in T$; passo $\Delta t$ (h). Barra da subestação (slack): $r$.
-- Filhos de $j$: $A(j) = \{k : (j,k)\in L\}$.
-- Dispositivos: BESS $s \in S$, PV $g \in G$. Conectados à barra $j$:
-  $S_j \subseteq S$ e $G_j \subseteq G$ (podem ter mais de um por barra).
-- **Superíndice** = tipo (Grid/BESS/PV); **subíndice** = barra(s) $i,j$, dispositivo
-  $s,g$ e tempo $t$.
+## Notation
 
-## Variáveis
+- Buses $i,j \in B$ and branches $(i,j) \in L$, directed from parent $i$ to
+  child $j$. Every non-root bus has one incoming branch.
+- Time periods $t \in T$, duration $\Delta t$ in hours, and root bus $r$.
+- Children of bus $j$: $A(j)=\{k:(j,k)\in L\}$.
+- BESS units $s\in S$ and PV systems $g\in G$. Sets $S_j$ and $G_j$ contain
+  the devices connected to bus $j$.
 
-$$
-\begin{aligned}
-v_{j,t} &= |V_{j,t}|^2 &&\text{(tensão ao quadrado)}\\
-\ell_{ij,t} &= |I_{ij,t}|^2 &&\text{(corrente ao quadrado no ramo } i\!\to\! j)\\
-P_{ij,t},\ Q_{ij,t} && &\text{(fluxos ativo/reativo no extremo emissor)}\\
-P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t} && &\text{(importação/exportação/reativo da rede na subestação)}\\
-P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ E^{\text{BESS}}_{s,t} && &\text{(carga/descarga/energia do BESS } s)\\
-P^{\text{PV}}_{g,t} && &\text{(geração despachada do PV } g)
-\end{aligned}
-$$
-
-## Parâmetros
+## Variables
 
 $$
 \begin{aligned}
-&r_{ij},\ x_{ij} &&\text{resistência/reatância do ramo}\\
-&\overline{\ell}_{ij} = \big(s^{\max}_{ij}\big)^2 &&\text{limite térmico (corrente}^2)\\
-&P^{\text{d}}_{j,t},\ Q^{\text{d}}_{j,t} &&\text{demanda ativa/reativa}\\
-&\underline{v}_j,\ \overline{v}_j,\ v^{\text{ref}} &&\text{limites de tensão e referência da subestação}\\
-&\overline{E}_s,\ \eta^{\text{ch}}_s,\ \eta^{\text{dis}}_s,\ \text{SoC}^{\text{ini}}_s,\ \text{SoC}^{\min}_s,\ \text{SoC}^{\max}_s &&\text{parâmetros do BESS } s\\
-&\overline{P}^{\text{ch}}_s,\ \overline{P}^{\text{dis}}_s &&\text{potências máximas de carga/descarga}\\
-&P^{\text{PV,av}}_{g,t},\ \tan\varphi_g &&\text{disponibilidade e razão Q/P do PV } g\\
-&\overline{P}^{\text{imp}},\ \overline{P}^{\text{exp}},\ \overline{Q}^{\text{grid}},\ \rho &&\text{limites da rede e tarifa de feed-in}\\
-&\pi_t,\ S_{\text{base}} &&\text{tarifa (R\$/kWh) e base do sistema}
+v_{j,t} &= |V_{j,t}|^2 &&\text{(squared voltage magnitude)}\\
+\ell_{ij,t} &= |I_{ij,t}|^2 &&\text{(squared branch current)}\\
+P_{ij,t},\ Q_{ij,t} && &\text{(sending-end active and reactive power)}\\
+P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t}
+&& &\text{(substation exchange)}\\
+P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ E^{\text{BESS}}_{s,t}
+&& &\text{(BESS charge, discharge, and stored energy)}\\
+P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t}
+&& &\text{(PV active and reactive power)}
 \end{aligned}
 $$
 
-## Função objetivo
-
-Minimizar o custo de energia (importação menos receita de exportação):
+## Parameters
 
 $$
-\min \quad \sum_{t \in T} \pi_t \left( P^{\text{grid,imp}}_{r,t} - \rho\, P^{\text{grid,exp}}_{r,t} \right) S_{\text{base}}\, \Delta t
+\begin{aligned}
+r_{ij},\ x_{ij} &:\quad\text{branch resistance and reactance}\\
+\tau_{ij} &:\quad\text{tap ratio in pu; }\tau_{ij}=1\text{ for lines}\\
+\overline{\ell}_{ij}=\big(s^{\max}_{ij}\big)^2
+&:\quad\text{squared-current limit}\\
+P^{\text d}_{j,t},\ Q^{\text d}_{j,t} &:\quad\text{active and reactive demand}\\
+\underline v_j,\ \overline v_j,\ v^{\text ref}
+&:\quad\text{voltage limits and substation reference}\\
+\overline E_s,\ \eta^{\text ch}_s,\ \eta^{\text dis}_s,
+\ \text{SoC}^{\text ini}_s,\ \text{SoC}^{\min}_s,\ \text{SoC}^{\max}_s
+&:\quad\text{BESS parameters}\\
+\overline P^{\text ch}_s,\ \overline P^{\text dis}_s
+&:\quad\text{BESS power limits}\\
+P^{\text{PV,av}}_{g,t},\ \overline S^{\text{PV}}_g,\ \tan\varphi_g
+&:\quad\text{PV availability, rating, and fixed-PF ratio}\\
+\overline P^{\text imp},\ \overline P^{\text exp},\ \overline Q^{\text grid},\ \rho
+&:\quad\text{grid limits and feed-in ratio}\\
+\pi_t,\ S_{\text base} &:\quad\text{energy price and system power base}
+\end{aligned}
 $$
 
-## Restrições
+## Objective
 
-### Injeção líquida na barra (geração − carga)
-
-$$
-p^{\text{inj}}_{j,t} =
-\big(P^{\text{grid,imp}}_{j,t} - P^{\text{grid,exp}}_{j,t}\big)\big|_{j=r}
-+ \sum_{s \in S_j}\big(P^{\text{BESS,dis}}_{s,t} - P^{\text{BESS,ch}}_{s,t}\big)
-+ \sum_{g \in G_j} P^{\text{PV}}_{g,t}
-- P^{\text{d}}_{j,t}
-$$
+The objective is the net energy cost:
 
 $$
-q^{\text{inj}}_{j,t} =
-Q^{\text{grid}}_{j,t}\big|_{j=r}
-+ \sum_{g \in G_j} \tan\varphi_g\, P^{\text{PV}}_{g,t}
-- Q^{\text{d}}_{j,t}
+\min \sum_{t\in T}\pi_t
+\left(P^{\text{grid,imp}}_{r,t}-\rho P^{\text{grid,exp}}_{r,t}\right)
+S_{\text base}\Delta t.
 $$
 
-### Balanço de potência (DistFlow), $\forall j \in B,\ t \in T$
+## Constraints
+
+### Net bus injection
 
 $$
-\sum_{k \in A(j)} P_{jk,t} = \big(P_{ij,t} - r_{ij}\,\ell_{ij,t}\big)\big|_{j \neq r} + p^{\text{inj}}_{j,t}
+p^{\text inj}_{j,t}=
+\left(P^{\text{grid,imp}}_{j,t}-P^{\text{grid,exp}}_{j,t}\right)\big|_{j=r}
++\sum_{s\in S_j}\left(P^{\text{BESS,dis}}_{s,t}-P^{\text{BESS,ch}}_{s,t}\right)
++\sum_{g\in G_j}P^{\text{PV}}_{g,t}-P^{\text d}_{j,t}
 $$
 
 $$
-\sum_{k \in A(j)} Q_{jk,t} = \big(Q_{ij,t} - x_{ij}\,\ell_{ij,t}\big)\big|_{j \neq r} + q^{\text{inj}}_{j,t}
+q^{\text inj}_{j,t}=Q^{\text grid}_{j,t}\big|_{j=r}
++\sum_{g\in G_j}Q^{\text{PV}}_{g,t}-Q^{\text d}_{j,t}.
 $$
 
-### Queda de tensão, $\forall (i,j) \in L,\ t \in T$
+The symbol $r$ denotes the root or substation bus. The notation
+$X\big|_{j=r}$ does not set every bus index to $r$; it includes $X$ only in the
+root-bus equation:
 
 $$
-v_{j,t} = v_{i,t} - 2\big(r_{ij} P_{ij,t} + x_{ij} Q_{ij,t}\big) + \big(r_{ij}^2 + x_{ij}^2\big)\,\ell_{ij,t}
+X\big|_{j=r}=\begin{cases}
+X, & j=r,\\
+0, & j\neq r.
+\end{cases}
 $$
 
-### Relaxação cônica (SOCP), $\forall (i,j) \in L,\ t \in T$
+Grid import, export, and reactive power therefore appear only at the
+substation. At every other bus, net injection consists of local devices minus
+local demand. The root-bus balance also has no incoming flow from a parent
+branch.
+
+### DistFlow balance
+
+For every $j\in B$ and $t\in T$:
 
 $$
-P_{ij,t}^2 + Q_{ij,t}^2 \le v_{i,t}\,\ell_{ij,t}
+\sum_{k\in A(j)}P_{jk,t}=
+\left(P_{ij,t}-r_{ij}\ell_{ij,t}\right)\big|_{j\neq r}+p^{\text inj}_{j,t}
 $$
 
-### Limites de rede (térmico e tensão)
-
 $$
-0 \le \ell_{ij,t} \le \overline{\ell}_{ij}, \qquad
-\underline{v}_j^{\,2} \le v_{j,t} \le \overline{v}_j^{\,2}, \qquad
-v_{r,t} = \big(v^{\text{ref}}\big)^2
+\sum_{k\in A(j)}Q_{jk,t}=
+\left(Q_{ij,t}-x_{ij}\ell_{ij,t}\right)\big|_{j\neq r}+q^{\text inj}_{j,t}.
 $$
 
-### BESS, $\forall s \in S,\ t \in T$
+### Voltage drop and transformer tap
+
+For every $(i,j)\in L$ and $t\in T$:
 
 $$
-E^{\text{BESS}}_{s,t} =
+v_{j,t}=\tau_{ij}^2\left[
+v_{i,t}-2\left(r_{ij}P_{ij,t}+x_{ij}Q_{ij,t}\right)
++\left(r_{ij}^2+x_{ij}^2\right)\ell_{ij,t}
+\right].
+$$
+
+For transformers, leakage impedance is referred to the sending side and
+followed by the ideal transformer. Transformer impedances are converted from
+their rated kVA base to the OPF power base.
+
+### SOCP relaxation
+
+$$
+P_{ij,t}^2+Q_{ij,t}^2\leq v_{i,t}\ell_{ij,t}.
+$$
+
+After the solve, tightness is checked with
+
+$$
+g_{ij,t}=v_{i,t}\ell_{ij,t}-P_{ij,t}^2-Q_{ij,t}^2.
+$$
+
+The reported confidence margin is a numerical diagnostic, not a statistical
+probability.
+
+### Network limits
+
+$$
+0\leq\ell_{ij,t}\leq\overline\ell_{ij},\qquad
+\underline v_j^{,2}\leq v_{j,t}\leq\overline v_j^{,2},\qquad
+v_{r,t}=\big(v^{\text ref}\big)^2.
+$$
+
+### BESS
+
+$$
+E^{\text{BESS}}_{s,t}=
 \begin{cases}
-\text{SoC}^{\text{ini}}_s\, \overline{E}_s + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s\big)\Delta t, & t = t_0\\[4pt]
-E^{\text{BESS}}_{s,t-1} + \big(\eta^{\text{ch}}_s P^{\text{BESS,ch}}_{s,t} - P^{\text{BESS,dis}}_{s,t}/\eta^{\text{dis}}_s\big)\Delta t, & t > t_0
+\text{SoC}^{\text ini}_s\overline E_s+
+\left(\eta^{\text ch}_sP^{\text{BESS,ch}}_{s,t}
+-P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s\right)\Delta t,&t=t_0,\\[4pt]
+E^{\text{BESS}}_{s,t-1}+
+\left(\eta^{\text ch}_sP^{\text{BESS,ch}}_{s,t}
+-P^{\text{BESS,dis}}_{s,t}/\eta^{\text dis}_s\right)\Delta t,&t>t_0.
 \end{cases}
 $$
 
 $$
-\text{SoC}^{\min}_s\, \overline{E}_s \le E^{\text{BESS}}_{s,t} \le \text{SoC}^{\max}_s\, \overline{E}_s, \qquad
-E^{\text{BESS}}_{s,\,t_{\text{end}}} = \text{SoC}^{\text{ini}}_s\, \overline{E}_s \ \text{(SoC cíclico)}
+\text{SoC}^{\min}_s\overline E_s\leq E^{\text{BESS}}_{s,t}
+\leq\text{SoC}^{\max}_s\overline E_s
 $$
 
 $$
-0 \le P^{\text{BESS,ch}}_{s,t} \le \overline{P}^{\text{ch}}_s, \qquad
-0 \le P^{\text{BESS,dis}}_{s,t} \le \overline{P}^{\text{dis}}_s
+0\leq P^{\text{BESS,ch}}_{s,t}\leq\overline P^{\text ch}_s,\qquad
+0\leq P^{\text{BESS,dis}}_{s,t}\leq\overline P^{\text dis}_s.
 $$
 
-### PV, $\forall g \in G,\ t \in T$
+If cyclic operation is enabled:
 
 $$
-0 \le P^{\text{PV}}_{g,t} \le P^{\text{PV,av}}_{g,t}
-\qquad(\text{ou } P^{\text{PV}}_{g,t} = P^{\text{PV,av}}_{g,t} \text{ se não-curtailável})
+E^{\text{BESS}}_{s,t_{\text end}}=\text{SoC}^{\text ini}_s\overline E_s.
 $$
 
-### Rede / subestação, $\forall t \in T$
+The reported net BESS power follows the convention
+$P^{\text{BESS,ch}}-P^{\text{BESS,dis}}$: positive for charging and negative
+for discharging.
+
+### PV inverter
 
 $$
-0 \le P^{\text{grid,imp}}_{r,t} \le \overline{P}^{\text{imp}}, \qquad
-0 \le P^{\text{grid,exp}}_{r,t} \le \overline{P}^{\text{exp}}, \qquad
-\big|Q^{\text{grid}}_{r,t}\big| \le \overline{Q}^{\text{grid}}
+0\leq P^{\text{PV}}_{g,t}\leq P^{\text{PV,av}}_{g,t}
 $$
 
-Não-simultaneidade import/export, sem binárias, via **SOS1** (no máximo um dos
-dois é não-nulo em cada período):
+$$
+\left(P^{\text{PV}}_{g,t}\right)^2+
+\left(Q^{\text{PV}}_{g,t}\right)^2\leq
+\left(\overline S^{\text{PV}}_g\right)^2.
+$$
+
+For `fixed_pf`, $Q^{\text{PV}}_{g,t}=\tan\varphi_gP^{\text{PV}}_{g,t}$.
+The other supported modes are `optimal`, `volt-var`, `volt-watt`, and
+`volt-var-watt`.
+
+### Substation
 
 $$
-\text{SOS1}\big(\{\,P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t}\,\}\big), \qquad \forall t \in T
+0\leq P^{\text{grid,imp}}_{r,t}\leq\overline P^{\text imp},\qquad
+0\leq P^{\text{grid,exp}}_{r,t}\leq\overline P^{\text exp},\qquad
+\left|Q^{\text grid}_{r,t}\right|\leq\overline Q^{\text grid}.
+$$
+
+An SOS1 constraint prevents simultaneous import and export:
+
+$$
+\text{SOS1}\left(\left\{P^{\text{grid,imp}}_{r,t},
+P^{\text{grid,exp}}_{r,t}\right\}\right),\qquad \forall t\in T.
 $$

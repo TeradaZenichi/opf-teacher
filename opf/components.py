@@ -1,38 +1,32 @@
-"""Domain classes: parameters in physical units, plus a `.result` after the solve.
+"""Estruturas de dados do caso e dos resultados."""
+import math
 
-Parameters stay in engineering units (kW, kVAr, kWh, ohm, kV); Base does the
-per-unit conversion the model needs. Once solved, each component carries its own
-time series:
-
-    case.bess[0].result.soc_kwh
-    case.grid.result.import_kw
-    case.buses[2].result.v_pu
-"""
 import pandas as pd
 
 
 class Base:
-    """System bases and physical <-> per-unit conversions (Z_base = V^2/S)."""
+    """Bases do sistema e conversões para pu."""
 
     def __init__(self, s_base_kva, v_base_kv):
         self.s_base_kva, self.v_base_kv = s_base_kva, v_base_kv
         self.z_base_ohm = v_base_kv ** 2 * 1e3 / s_base_kva
 
-    def pu_power(self, kw): return kw / self.s_base_kva         # kW / kVAr / kVA
-    def pu_energy(self, kwh): return kwh / self.s_base_kva      # kWh
+    def pu_power(self, kw): return kw / self.s_base_kva
+    def pu_energy(self, kwh): return kwh / self.s_base_kva
     def pu_impedance(self, ohm): return ohm / self.z_base_ohm
     def to_kw(self, pu): return pu * self.s_base_kva
     def to_kwh(self, pu): return pu * self.s_base_kva
 
 
-# Results, populated by opf.results after the solve.
 class BusResult:
     def __init__(self, v_pu): self.v_pu = v_pu
 
 
 class BranchResult:
-    def __init__(self, p_kw, q_kvar, loss_kw):
+    def __init__(self, p_kw, q_kvar, loss_kw, socp_gap_pu2, socp_gap_normalized):
         self.p_kw, self.q_kvar, self.loss_kw = p_kw, q_kvar, loss_kw
+        self.socp_gap_pu2 = socp_gap_pu2
+        self.socp_gap_normalized = socp_gap_normalized
 
 
 class GridResult:
@@ -52,12 +46,14 @@ class PvResult:
         self.q_kvar = q_kvar
 
 
-# Network components and devices.
 class Bus:
-    def __init__(self, id, type, name, v_min_pu, v_max_pu, p_load_kw, q_load_kw):
+    def __init__(self, id, type, name, v_min_pu, v_max_pu, p_load_kw, q_load_kw,
+                 phases=None, kv_base_ln=None):
         self.id, self.type, self.name = id, type, name
         self.v_min_pu, self.v_max_pu = v_min_pu, v_max_pu
         self.p_load_kw, self.q_load_kw = p_load_kw, q_load_kw
+        self.phases = tuple(phases or ())
+        self.kv_base_ln = kv_base_ln
         self.result = None
 
     @property
@@ -65,10 +61,39 @@ class Bus:
 
 
 class Branch:
-    def __init__(self, from_bus, to_bus, r_ohm, x_ohm, s_max_kva):
+    def __init__(self, from_bus, to_bus, r_ohm, x_ohm, s_max_kva,
+                 name=None, phases=None, norm_amps=None,
+                 r_matrix_ohm=None, x_matrix_ohm=None,
+                 length=None, length_units=None, element_type="line",
+                 tap_ratio=1.0, r_pu_on_rating=None, x_pu_on_rating=None,
+                 impedance_base_kva=None, connections=None):
         self.from_bus, self.to_bus = from_bus, to_bus
         self.r_ohm, self.x_ohm, self.s_max_kva = r_ohm, x_ohm, s_max_kva
+        self.name = name
+        self.phases = tuple(phases or ())
+        self.norm_amps = norm_amps
+        self.r_matrix_ohm = r_matrix_ohm
+        self.x_matrix_ohm = x_matrix_ohm
+        self.length = length
+        self.length_units = length_units
+        self.element_type = element_type
+        self.tap_ratio = tap_ratio
+        self.r_pu_on_rating = r_pu_on_rating
+        self.x_pu_on_rating = x_pu_on_rating
+        self.impedance_base_kva = impedance_base_kva
+        self.connections = tuple(connections or ())
         self.result = None
+
+    def impedance_pu(self, base, from_bus):
+        """Retorna R e X nas bases do ramo."""
+        if self.impedance_base_kva is not None:
+            scale = base.s_base_kva / self.impedance_base_kva
+            return self.r_pu_on_rating * scale, self.x_pu_on_rating * scale
+
+        kv_ln = float(from_bus.kv_base_ln or 0.0)
+        v_base_ll_kv = math.sqrt(3.0) * kv_ln if kv_ln > 0.0 else base.v_base_kv
+        z_base_ohm = v_base_ll_kv ** 2 * 1e3 / base.s_base_kva
+        return self.r_ohm / z_base_ohm, self.x_ohm / z_base_ohm
 
 
 class Grid:
@@ -100,25 +125,33 @@ class Pv:
 
 class Summary:
     def __init__(self, status, objective_cost, energy_cost, energy_import_kwh, energy_export_kwh,
-                 pv_generated_kwh, pv_curtailed_kwh, losses_kwh, v_min_pu, v_max_pu):
+                 pv_generated_kwh, pv_curtailed_kwh, losses_kwh, v_min_pu, v_max_pu,
+                 socp_gap_max_pu2, socp_gap_max_normalized, socp_gap_tolerance,
+                 socp_confidence_margin, socp_confidence, socp_relaxation_tight):
         self.status, self.objective_cost, self.energy_cost = status, objective_cost, energy_cost
         self.energy_import_kwh, self.energy_export_kwh = energy_import_kwh, energy_export_kwh
         self.pv_generated_kwh, self.pv_curtailed_kwh = pv_generated_kwh, pv_curtailed_kwh
         self.losses_kwh = losses_kwh
         self.v_min_pu, self.v_max_pu = v_min_pu, v_max_pu
+        self.socp_gap_max_pu2 = socp_gap_max_pu2
+        self.socp_gap_max_normalized = socp_gap_max_normalized
+        self.socp_gap_tolerance = socp_gap_tolerance
+        self.socp_confidence_margin = socp_confidence_margin
+        self.socp_confidence = socp_confidence
+        self.socp_relaxation_tight = socp_relaxation_tight
 
     def as_dict(self): return dict(self.__dict__)
 
 
 class Case:
-    def __init__(self, name, base, buses, branches, grid, bess, pv, evse,
-                 timestamps, dt_h, price, objective):
+    def __init__(self, name, base, buses, branches, grid, bess, pv,
+                 timestamps, dt_h, price):
         self.name, self.base = name, base
         self.buses, self.branches, self.grid = buses, branches, grid
-        self.bess, self.pv, self.evse = bess, pv, evse
+        self.bess, self.pv = bess, pv
         self.timestamps, self.dt_h, self.price = timestamps, dt_h, price
-        self.objective = objective
-        self.parent_branch, self.children = {}, {}    # radial topology, filled by load_case
+        self.parent_branch, self.children = {}, {}
+        self.bus_name_to_id = {}
         self.summary = None
 
     @property

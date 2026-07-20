@@ -1,8 +1,4 @@
-"""Read an example (config.json + devices.json + CSVs) into a Case.
-
-Everything stays in physical units (kW/kVAr/kWh/ohm/kV) -- the model does the
-per-unit conversion. The demand.csv timestamps define the time axis (periods, dt).
-"""
+"""Leitura dos arquivos de entrada."""
 from __future__ import annotations
 
 import json
@@ -12,10 +8,11 @@ from pathlib import Path
 import pandas as pd
 
 from opf.components import Base, Bess, Branch, Bus, Case, Grid, Pv
+from opf.opendss import load_opendss_network, resolve_bus_id
 
 
 def load_case(path: str | Path) -> Case:
-    path = Path(path)
+    path = Path(path).expanduser().resolve()
     cfg = _read_json(path / "config.json")
 
     base = Base(float(cfg["base"]["s_base_kva"]), float(cfg["base"]["v_base_kv"]))
@@ -24,7 +21,21 @@ def load_case(path: str | Path) -> Case:
     v_max = float(vlim.get("v_max_pu", 1.05))
     pf_default = float(cfg.get("defaults", {}).get("power_factor", 1.0))
 
-    # demand.csv is wide (P2,Q2,P3,Q3,...); split each column into a per-bus series
+    network_cfg = cfg.get("network", {})
+    master_ref = network_cfg.get("master")
+    if not master_ref:
+        raise ValueError("OpenDSS network requires network.master in config.json")
+    dss_network = load_opendss_network(
+        path / master_ref,
+        slack_bus=network_cfg.get("slack_bus", cfg.get("grid", {}).get("bus")),
+        bus_ids=network_cfg.get("bus_ids"),
+        fallback_v_base_kv=base.v_base_kv,
+    )
+    bus_name_to_id = dss_network.bus_name_to_id
+
+    def case_bus(value) -> int:
+        return resolve_bus_id(value, bus_name_to_id)
+
     dem = (pd.read_csv(path / "demand.csv", parse_dates=["timestamp"])
            .sort_values("timestamp").reset_index(drop=True))
     idx = pd.DatetimeIndex(dem["timestamp"])
@@ -32,39 +43,61 @@ def load_case(path: str | Path) -> Case:
     for col in dem.columns:
         if col == "timestamp":
             continue
-        kind, bus = col[0].upper(), int(col[1:])     # "P2" -> ("P", 2)
+        kind = col[0].upper()
+        if kind not in {"P", "Q"}:
+            raise ValueError(f"Invalid demand column {col!r}; expected P<bus> or Q<bus>")
+        bus = case_bus(col[1:].lstrip("_"))
         (p_load if kind == "P" else q_load)[bus] = pd.Series(dem[col].to_numpy(), index=idx)
 
     zero = pd.Series(0.0, index=idx)
     q_ratio = math.tan(math.acos(pf_default))
 
-    bus_df = pd.read_csv(path / "bus.csv")
-    has_vmin, has_vmax = "v_min_pu" in bus_df.columns, "v_max_pu" in bus_df.columns
     buses: dict[int, Bus] = {}
-    for _, r in bus_df.iterrows():
-        bid = int(r["bus_id"])
+    for dss_bus in dss_network.buses:
+        bid = dss_bus.id
         p = p_load.get(bid, zero.copy())
-        q = q_load.get(bid, p * q_ratio if bid in p_load else zero.copy())  # Q from pf if not given
+        q = q_load.get(bid, p * q_ratio if bid in p_load else zero.copy())
         buses[bid] = Bus(
             id=bid,
-            type=str(r["type"]).strip().lower(),
-            name=str(r.get("name", f"B{bid}")),
-            v_min_pu=float(r["v_min_pu"]) if has_vmin else v_min,
-            v_max_pu=float(r["v_max_pu"]) if has_vmax else v_max,
+            type="slack" if bid == dss_network.root_bus else "pq",
+            name=dss_bus.name,
+            v_min_pu=v_min,
+            v_max_pu=v_max,
             p_load_kw=p,
             q_load_kw=q,
+            phases=dss_bus.phases,
+            kv_base_ln=dss_bus.kv_base_ln,
         )
-
-    br_df = pd.read_csv(path / "branch.csv")
     branches = [
-        Branch(int(r["from_bus"]), int(r["to_bus"]),
-               float(r["r_ohm"]), float(r["x_ohm"]), float(r["s_max_kva"]))
-        for _, r in br_df.iterrows()
+        Branch(
+            d.from_bus, d.to_bus, d.r_ohm, d.x_ohm, d.s_max_kva,
+            name=d.name,
+            phases=d.phases,
+            norm_amps=d.norm_amps,
+            r_matrix_ohm=d.r_matrix_ohm,
+            x_matrix_ohm=d.x_matrix_ohm,
+            length=d.length,
+            length_units=d.units,
+            element_type=d.element_type,
+            tap_ratio=d.tap_ratio,
+            r_pu_on_rating=d.r_pu_on_rating,
+            x_pu_on_rating=d.x_pu_on_rating,
+            impedance_base_kva=d.impedance_base_kva,
+            connections=d.connections,
+        )
+        for d in dss_network.branches
     ]
+
+    unknown_profile_buses = (set(p_load) | set(q_load)) - set(buses)
+    if unknown_profile_buses:
+        raise ValueError(
+            f"Demand profiles reference buses not present in the network: "
+            f"{sorted(unknown_profile_buses)}"
+        )
 
     g = cfg["grid"]
     grid = Grid(
-        bus=int(g["bus"]),
+        bus=dss_network.root_bus if "bus" not in g else case_bus(g["bus"]),
         v_ref_pu=float(g.get("v_ref_pu", 1.0)),
         p_import_max_kw=float(g.get("p_import_max_kw", 0.0)),
         p_export_max_kw=float(g.get("p_export_max_kw", 0.0)),
@@ -80,7 +113,7 @@ def load_case(path: str | Path) -> Case:
 
     bess = [
         Bess(
-            id=str(d["id"]), bus=int(d["bus"]),
+            id=str(d["id"]), bus=case_bus(d["bus"]),
             e_cap_kwh=float(d["e_cap_kwh"]),
             p_charge_max_kw=float(d["p_charge_max_kw"]),
             p_discharge_max_kw=float(d["p_discharge_max_kw"]),
@@ -96,7 +129,7 @@ def load_case(path: str | Path) -> Case:
 
     pv = [
         Pv(
-            id=str(d["id"]), bus=int(d["bus"]),
+            id=str(d["id"]), bus=case_bus(d["bus"]),
             p_max_kw=float(d["p_max_kw"]),
             s_max_kva=float(d.get("s_max_kva", d["p_max_kw"])),
             control=str(d.get("control", "optimal")),
@@ -115,12 +148,11 @@ def load_case(path: str | Path) -> Case:
         grid=grid,
         bess=bess,
         pv=pv,
-        evse=list(dev.get("evse", [])),
         timestamps=list(idx),
         dt_h=_infer_dt_hours(idx),
         price=price,
-        objective=cfg.get("objective", {"minimize": "energy_cost"}),
     )
+    case.bus_name_to_id = dict(bus_name_to_id)
     _build_topology(case)
     _validate(case)
     return case
@@ -138,7 +170,7 @@ def _infer_dt_hours(idx: pd.DatetimeIndex) -> float:
 
 
 def _load_profile(path: Path, ref: str, idx: pd.DatetimeIndex) -> pd.Series:
-    """Read a 'file.csv:column' profile, aligned to the time axis."""
+    """Lê uma referência no formato arquivo.csv:coluna."""
     fname, _, col = ref.partition(":")
     df = (pd.read_csv(path / fname, parse_dates=["timestamp"])
           .sort_values("timestamp"))
@@ -155,6 +187,13 @@ def _build_topology(case: Case) -> None:
 def _validate(case: Case) -> None:
     if case.n_periods == 0:
         raise ValueError("No periods found in demand.csv")
+    if case.root not in case.buses:
+        raise ValueError(f"Grid bus {case.root} is not present in the network")
+    for device in [*case.bess, *case.pv]:
+        if device.bus not in case.buses:
+            raise ValueError(
+                f"Device {device.id!r} references bus {device.bus}, which is not in the network"
+            )
     non_root = [b for b in case.buses if b != case.root]
     for b in non_root:
         if b not in case.parent_branch:

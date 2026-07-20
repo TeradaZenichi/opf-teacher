@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 from opf.components import Case
 from teacher import BessOpt
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+CASE_PATH = PROJECT_ROOT / "examples" / "case5"
+OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
+SOLVER = "gurobi_direct"
+SOCP_GAP_TOLERANCE = 1e-6
+SHOW_PLOT = False
+
+
 def _aggregate(devices, attr):
-    """Sum a result series over all devices (one or many)."""
     total = None
     for d in devices:
         s = getattr(d.result, attr)
@@ -46,7 +52,7 @@ def plot_results(case: Case, out_path: Path, show: bool):
 
     ax = axes[1]
     if case.bess:
-        p_net = _aggregate(case.bess, "p_net_kw")   # >0 charge, <0 discharge
+        p_net = _aggregate(case.bess, "p_net_kw")
         soc = _aggregate(case.bess, "soc_kwh")
         colors = ["tab:orange" if v >= 0 else "tab:green" for v in p_net]
         ax.bar(t, p_net, width=0.03, color=colors, label="Charge (+) / Discharge (-)")
@@ -100,20 +106,20 @@ def print_summary(case: Case):
     print(f"\n=== {case.name} - status: {s.status} ===")
     for k, v in s.as_dict().items():
         if k != "status":
-            print(f"  {k:>20}: {v:,.3f}")
+            if isinstance(v, bool):
+                value = str(v)
+            else:
+                value = f"{v:,.6g}" if isinstance(v, (int, float)) else str(v)
+            print(f"  {k:>28}: {value}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Solve an example and plot the optimal dispatch.")
-    ap.add_argument("example", nargs="?", default="examples/case5", help="example directory")
-    ap.add_argument("--solver", default="gurobi_direct")
-    ap.add_argument("--out", default="figures", help="output directory for figures")
-    ap.add_argument("--show", action="store_true", help="open the matplotlib window")
-    args = ap.parse_args()
-
-    case = BessOpt(args.example).build().solve(solver=args.solver)
+    case = BessOpt(CASE_PATH).build().solve(
+        solver=SOLVER,
+        socp_gap_tolerance=SOCP_GAP_TOLERANCE,
+    )
     print_summary(case)
-    plot_results(case, Path(args.out) / f"{Path(args.example).name}_dispatch.png", args.show)
+    plot_results(case, OUTPUT_PATH, SHOW_PLOT)
 
 
 if __name__ == "__main__":

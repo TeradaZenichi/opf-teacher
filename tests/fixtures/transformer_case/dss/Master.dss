@@ -1,0 +1,8 @@
+Clear
+New Circuit.transformer_case phases=3 bus1=source.1.2.3 basekV=11 pu=1 frequency=60
+
+New Transformer.tx phases=3 windings=2 buses=[source.1.2.3 low.1.2.3] conns=[wye wye] kVs=[11 0.4] kVAs=[1000 1000] %Rs=[0.5 0.5] XHL=6 Taps=[1.0 1.025]
+New Line.lv_line phases=3 bus1=low.1.2.3 bus2=load.1.2.3 length=1 units=none R1=0.01 X1=0.02 R0=0.01 X0=0.02 C1=0 C0=0 NormAmps=300
+
+Set VoltageBases=[11, 0.4]
+CalcVoltageBases

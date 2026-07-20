@@ -1,9 +1,4 @@
-"""PV inverter control via optimization (non-autonomous).
-
-optimal   -- the optimizer picks P and Q freely inside the capability disk
-             P^2+Q^2 <= S^2 (imposed in model.py, so there's nothing to add here).
-fixed_pf  -- baseline at a fixed power factor, Q = tan(phi) * P.
-"""
+"""Controles optimal e fixed_pf do inversor fotovoltaico."""
 import pyomo.environ as pyo
 
 MODES = ("optimal", "fixed_pf")

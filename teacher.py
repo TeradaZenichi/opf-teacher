@@ -1,14 +1,4 @@
-"""High-level facade for the optimal operation of BESS/DERs in distribution.
-
-    from teacher import BessOpt
-
-    case = BessOpt("examples/case5").build().solve()
-
-    print(case.summary)
-    print(case.bess[0].result.soc_kwh)     # SoC (kWh) per timestamp
-    print(case.grid.result.import_kw)      # grid import (kW)
-    print(case.buses[2].result.v_pu)       # voltage (p.u.) at bus 2
-"""
+"""Interface de construção e solução do OPF."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,7 +20,8 @@ class BessOpt:
         self.model = build_model(self.case)
         return self
 
-    def solve(self, solver: str = "gurobi_direct", tee: bool = False, **options) -> Case:
+    def solve(self, solver: str = "gurobi_direct", tee: bool = False,
+              socp_gap_tolerance: float = 1e-6, **options) -> Case:
         if self.model is None:
             self.build()
         opt = pyo.SolverFactory(solver)
@@ -42,4 +33,9 @@ class BessOpt:
         for k, v in options.items():
             opt.options[k] = v
         res = opt.solve(self.model, tee=tee)
-        return attach_results(self.model, self.case, str(res.solver.termination_condition))
+        return attach_results(
+            self.model,
+            self.case,
+            str(res.solver.termination_condition),
+            socp_gap_tolerance=socp_gap_tolerance,
+        )

@@ -1,0 +1,12 @@
+Clear
+New Circuit.test phases=3 bus1=bus_001.1.2.3 basekV=0.22 pu=1.0 frequency=60
+
+New LineCode.main nphases=3 R1=0.63 X1=0.12 R0=0.80 X0=0.30 Units=km NormAmps=100
+New Line.line_001_002 bus1=bus_001.1.2.3 bus2=bus_002.1.2.3 phases=3 LineCode=main Length=0.025 Units=km
+New Line.line_002_003 bus1=bus_002.1.2.3 bus2=bus_003.1.2.3 phases=3 LineCode=main Length=0.025 Units=km
+
+New Load.load_003 bus1=bus_003.1.2.3 phases=3 conn=wye kV=0.22 kW=3 kvar=0.6
+
+Set VoltageBases=[0.22]
+CalcVoltageBases
+Solve

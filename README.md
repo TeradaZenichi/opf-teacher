@@ -1,128 +1,180 @@
 # opf-teacher
 
-Optimal operation of batteries (BESS) and DERs in **distribution networks** for
-cost reduction, via **OPF** (optimal power flow).
+Optimal operation of batteries and distributed energy resources in radial
+distribution networks. The network is read from an OpenDSS `Master.dss` file;
+loads, prices, and PV availability are provided as CSV time series.
 
-The model uses the **branch flow model (DistFlow, Baran-Wu)** for radial networks
-with a **second-order cone relaxation (SOCP)** — the exact rotated cone:
+The optimization model uses DistFlow with an SOCP relaxation. See the complete
+formulation in [English](docs/formulation.md) or
+[Portuguese](docs/formulation.pt-BR.md).
 
-```
-P_j² + Q_j²  ≤  v_i·ℓ_j                                    (exact rotated cone)
-v_j = v_i − 2(r_j P_j + x_j Q_j) + (r_j² + x_j²) ℓ_j       (voltage drop)
-soc_t = soc_{t−1} + (η_c·pch − pdis/η_d)·Δt                (battery dynamics)
-min  Σ_t  price_t · (import_t − r_feedin·export_t) · Δt    (energy cost)
-```
+## Installation
 
-The full formulation (indices, parameters, variables, objective and all
-constraints) is in [docs/formulation.md](docs/formulation.md).
-
-## Layout
-
-```
-opf/
-├── components.py  domain classes (Base, Bus, Branch, Grid, Bess, Pv, Case):
-│                  physical parameters + a .result filled after the solve
-├── data.py        load_case(dir) -> Case   (reads JSON + CSV)
-├── model.py       build_model(case) -> Pyomo model (DistFlow SOCP, converts to p.u.)
-├── pv_optimal.py  PV inverter control via optimization (optimal / fixed_pf)
-├── pv_droop.py    autonomous PV control: Volt-VAr / Volt-Watt curves (SOS2)
-└── results.py     attach_results(model, case) -> fills .result and .summary
-teacher.py         BessOpt facade  ->  BessOpt(dir).build().solve()
-run.py             solve + save a plot panel to figures/
-examples/
-└── case5/         a 5-bus radial feeder, 1 BESS, 1 PV
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Each component holds its **parameters** (physical units) and, after the solve,
-its **result** in `.result` (series indexed by timestamp). The per-unit
-conversion is centralized in `Base` and happens inside the model.
+Gurobi is the default solver. To share a WLS license across projects, place
+`gurobi.lic` at:
 
-### Anatomy of an example (`examples/case5/`)
+```text
+C:\Users\<username>\gurobi.lic
+```
 
-| File | Role |
+## Running the example
+
+Paths and runtime options are defined at the top of `main.py`:
+
+```python
+CASE_PATH = PROJECT_ROOT / "examples" / "case5"
+OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
+SOLVER = "gurobi_direct"
+SOCP_GAP_TOLERANCE = 1e-6
+SHOW_PLOT = False
+```
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe main.py
+```
+
+## Input files
+
+The `case5` directory is the reference example:
+
+```text
+examples/case5/
+├── config.json
+├── devices.json
+├── demand.csv
+├── price.csv
+├── pv.csv
+└── dss/
+    └── Master.dss
+```
+
+| File | Contents |
 |---|---|
-| `config.json`  | system/grid: p.u. base (kVA/kV), grid/substation, voltage limits, objective |
-| `devices.json` | controllable DERs: `bess`, `pv`, `evse` (which exist + static parameters) |
-| `bus.csv`      | buses: `bus_id, type, name` |
-| `branch.csv`   | radial branches: `from_bus, to_bus, r_ohm, x_ohm, s_max_kva` |
-| `demand.csv`   | load (wide): `timestamp, P2, Q2, …, Pn, Qn` in kW / kVAr |
-| `pv.csv`       | PV availability: `timestamp, PV<bus>` in kW |
-| `price.csv`    | tariff: `timestamp, price_per_kwh` |
+| `config.json` | system bases, slack bus, voltage limits, and grid limits |
+| `devices.json` | BESS and PV parameters |
+| `dss/Master.dss` | buses, lines, transformers, impedances, and ratings |
+| `demand.csv` | active and reactive demand by bus |
+| `price.csv` | energy price by period |
+| `pv.csv` | available PV power |
 
-Unit convention in the files: **kW / kVAr / kWh / Ω / kV**. The loader converts
-everything to per-unit on the system base (`config.base`); the time axis (periods
-and `Δt`) is inferred from the series `timestamp`s.
+Input units are kW, kVAr, kWh, ohm, and kV. Conversion to per unit is performed
+when the Pyomo model is built.
 
-## Usage
+The network path and slack bus are configured in `config.json`:
+
+```json
+"network": {
+  "master": "dss/Master.dss",
+  "slack_bus": "bus_001"
+}
+```
+
+OpenDSS bus names are also used in `devices.json` and demand columns, such as
+`Pbus_004` and `Qbus_004`. Names without a numeric suffix can be mapped
+explicitly:
+
+```json
+"bus_ids": {
+  "source": 1,
+  "load": 2
+}
+```
+
+## OpenDSS support
+
+Supported network elements:
+
+- radial topology;
+- three-phase lines using `R1`, `X1`, `Length`, and `NormAmps`;
+- three-phase, two-winding transformers;
+- transformer `kV`, `kVA`, `%R`, `XHL`, connection, and fixed tap;
+- multiple voltage levels.
+
+Not yet supported:
+
+- meshed networks;
+- single-phase transformer banks;
+- transformers with three or more windings;
+- automatic `RegControl` actions;
+- unbalanced three-phase OPF.
+
+Line `Rmatrix`, `Xmatrix`, and phase data are retained in the network objects
+for the future unbalanced formulation.
+
+## Python API
 
 ```python
 from teacher import BessOpt
 
-case = BessOpt("examples/case5").build().solve(solver="gurobi_direct")
+case = BessOpt("examples/case5").build().solve(
+    solver="gurobi_direct",
+    socp_gap_tolerance=1e-6,
+)
 
-print(case.summary)                    # cost, energy, losses, min/max voltage
-print(case.bess[0].result.soc_kwh)     # battery SoC (kWh) per timestamp
-print(case.bess[0].result.p_net_kw)    # charge (+) / discharge (-) (kW)
-print(case.grid.result.import_kw)      # grid import (kW)
-print(case.buses[4].result.v_pu)       # voltage (p.u.) at bus 4
+print(case.summary.as_dict())
+print(case.bess[0].result.soc_kwh)
+print(case.bess[0].result.p_net_kw)
+print(case.grid.result.import_kw)
+print(case.buses[4].result.v_pu)
 ```
 
-`solve()` returns the `Case` with every component populated: `case.grid`,
-`case.bess[i]`, `case.pv[i]`, `case.buses[b]`, `case.branches[i]` — each with a
-`.result` in kW/kVAr/kV/kWh.
+The BESS sign convention is `p_net_kw > 0` for charging and `p_net_kw < 0`
+for discharging.
 
-### Visualization
+## Relaxation gap
 
-`run.py` solves an example and saves a panel (price vs import, battery vs SoC,
-PV vs load, voltages) to `figures/`:
+After each solve, the code evaluates
 
-```bash
-python run.py                       # examples/case5
-python run.py examples/case5 --show # open the matplotlib window
+```text
+g = v*l - P² - Q²
 ```
 
-## PV inverter control
+The main fields in `case.summary` are:
 
-Each PV chooses how its inverter dispatches P and Q via the `control` field in
-`devices.json`:
+- `socp_gap_max_normalized`;
+- `socp_gap_tolerance`;
+- `socp_confidence_margin`;
+- `socp_confidence`;
+- `socp_relaxation_tight`.
 
-| `control` | Q | P |
-|---|---|---|
-| `optimal`       | free within the capability disk (optimizer's choice) | curtailable |
-| `fixed_pf`      | `Q = tan(φ)·P` | curtailable |
-| `volt-var`      | Volt-VAr droop curve `Q(V)` | at availability |
-| `volt-watt`     | 0 | Volt-Watt droop curve `P ≤ f(V)` |
-| `volt-var-watt` | Volt-VAr `Q(V)` | Volt-Watt `P(V)` |
+The confidence margin is `tolerance - maximum normalized gap`. A positive value
+passes the configured criterion. Per-branch time series are available at
+`branch.result.socp_gap_pu2` and `branch.result.socp_gap_normalized`.
 
-The inverter rating `P² + Q² ≤ S²` applies in every mode. The droop curves
-(`pv_droop.py`) are the standard IEEE-1547 local controls; `optimal`
-(`pv_optimal.py`) lets the OPF pick the best P/Q and generally dominates them.
+This is a numerical tightness check, not a statistical probability.
 
-## Solver
+## PV control
 
-The problem is a **MISOCP**: linear objective, a conic constraint (SOCP), and one
-**SOS1** constraint per period (no simultaneous import/export). The solver must
-support quadratic cones **and** SOS / branch-and-bound — pure LP/MILP (e.g. HiGHS)
-and pure continuous NLP (e.g. IPOPT) do **not** work. Options:
+The `control` field accepts:
 
-- **Gurobi** (`gurobi_direct`) — the default. Handles SOCP + SOS1 natively.
-- **SCIP** (`scip` / PySCIPOpt) — open-source, MINLP/MISOCP.
+| Value | Behavior |
+|---|---|
+| `optimal` | P and Q selected by the OPF |
+| `fixed_pf` | fixed power factor |
+| `volt-var` | local Volt-VAr curve |
+| `volt-watt` | local Volt-Watt curve |
+| `volt-var-watt` | combined Volt-VAr and Volt-Watt curves |
 
-### Gurobi license (academic, free)
+All modes enforce the inverter apparent-power rating.
 
-The `pip`-installed `gurobipy` ships with a **restricted license** that only
-solves small models (the full 24h `case5` exceeds it because of the conic
-constraints). To unlock it:
+## Repository layout
 
-1. Sign in at <https://portal.gurobi.com> with an academic email.
-2. Request an **Academic WLS** (Web License Service) license — this is the one
-   that works with pip's `gurobipy`, without installing the full Gurobi.
-3. Download `gurobi.lic` (it holds `WLSACCESSID`, `WLSSECRET`, `LICENSEID`) and
-   put it at `C:\Users\<you>\gurobi.lic`, or export the matching env vars.
-
-Check with:
-
-```python
-import gurobipy as gp
-gp.Env().start()   # no error => license is active
+```text
+opf/
+├── components.py   domain and result objects
+├── data.py         case loader
+├── opendss.py      OpenDSS interface
+├── model.py        Pyomo formulation
+├── pv_droop.py     Volt-VAr and Volt-Watt controls
+├── pv_optimal.py   optimal and fixed_pf controls
+└── results.py      result conversion and gap analysis
+teacher.py          BessOpt interface
+main.py             configured example runner
 ```
