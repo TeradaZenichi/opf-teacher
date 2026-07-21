@@ -147,6 +147,7 @@ class OpenDSSImporterTest(unittest.TestCase):
         self.assertEqual(case.bess[0].q_loss_rated_kw, 0.0)
         self.assertEqual(case.pv[0].bus, 3)
         self.assertEqual(case.pv[0].q_loss_rated_kw, 0.0)
+        self.assertFalse(case.pv[0].night_var)
         self.assertEqual(case.buses[2].name, "bus_002")
         self.assertEqual(case.buses[2].phases, (1, 2, 3))
         self.assertTrue(math.isclose(case.branches[0].r_ohm, 0.01575))
@@ -242,10 +243,11 @@ class Case5Test(unittest.TestCase):
         self.assertEqual(bess.s_max_kva, 50.0)
         self.assertEqual(bess.q_loss_rated_kw, 0.5)
         self.assertEqual(case.pv[0].q_loss_rated_kw, 3.0)
+        self.assertFalse(case.pv[0].night_var)
         self.assertEqual(model.qbess[bess.id, 0].bounds, (-0.05, 0.05))
         self.assertEqual(model.pbess_loss[bess.id, 0].bounds, (0.0, 0.0005))
         self.assertEqual(model.nvariables(), 672)
-        self.assertEqual(model.nconstraints(), 577)
+        self.assertEqual(model.nconstraints(), 588)
 
     def test_reactive_losses_follow_rated_quadratic_curve_and_drain_soc(self):
         case = load_case("examples/case5")
@@ -263,6 +265,26 @@ class Case5Test(unittest.TestCase):
         model.pdis["b1", 0].set_value(0.0)
         model.soc["b1", 0].set_value(0.05 - 0.000125)
         self.assertAlmostEqual(pyo.value(model.soc_balance["b1", 0].body), 0.0)
+
+    def test_night_var_uses_grid_power_for_pv_inverter_loss(self):
+        case = load_case("examples/case5")
+        case.pv[0].night_var = True
+        model = build_model(case)
+
+        self.assertNotIn(("pv1", 0), model.pv_no_night_q)
+        model.ppv["pv1", 0].set_value(0.0)
+        model.qpv["pv1", 0].set_value(0.15)
+        model.ppv_loss["pv1", 0].set_value(0.00075)
+
+        self.assertAlmostEqual(
+            pyo.value(model.ppv_grid_consumption["pv1", 0]), 0.00075
+        )
+        solar_loss = pyo.value(
+            model.ppv_loss["pv1", 0] - model.ppv_grid_consumption["pv1", 0]
+        )
+        self.assertAlmostEqual(solar_loss, 0.0)
+        self.assertAlmostEqual(pyo.value(model.ppv_net["pv1", 0]), -0.00075)
+        self.assertAlmostEqual(pyo.value(model.pv_q_loss["pv1", 0].body), 0.0)
 
 
 class TransformerCaseTest(unittest.TestCase):

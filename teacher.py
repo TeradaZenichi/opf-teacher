@@ -28,8 +28,7 @@ class BessOpt:
         opt = pyo.SolverFactory(solver)
         if opt is None or not opt.available(exception_flag=False):
             raise RuntimeError(
-                f"Solver '{solver}' unavailable. This model is a MISOCP; use e.g. "
-                f"gurobi_direct or scip (see README)."
+                f"Solver '{solver}' unavailable; use gurobi_direct or scip."
             )
         for k, v in options.items():
             opt.options[k] = v

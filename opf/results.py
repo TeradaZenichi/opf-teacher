@@ -167,12 +167,18 @@ def attach_results(
         inverter_loss = series([
             base.to_kw(_val(m.ppv_loss[g.id, t])) for t in T
         ])
+        grid_consumption = series([
+            base.to_kw(_val(m.ppv_grid_consumption[g.id, t])) for t in T
+        ])
+        solar_loss = inverter_loss - grid_consumption
         g.result = PvResult(
             avail_kw=g.avail_kw.copy(),
             gen_kw=gen,
-            curtail_kw=g.avail_kw - gen - inverter_loss,
+            curtail_kw=g.avail_kw - gen - solar_loss,
             q_kvar=series([base.to_kw(_val(m.qpv[g.id, t])) for t in T]),
             inverter_loss_kw=inverter_loss,
+            p_net_kw=gen - grid_consumption,
+            grid_consumption_kw=grid_consumption,
         )
 
     case.summary = Summary(

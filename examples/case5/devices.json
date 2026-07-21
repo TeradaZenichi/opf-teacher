@@ -24,6 +24,7 @@
       "p_max_kw": 260.0,
       "s_max_kva": 300.0,
       "q_loss_rated_kw": 3.0,
+      "night_var": false,
       "profile": "pv.csv:PV5",
       "control": "optimal",
       "curtailable": true,

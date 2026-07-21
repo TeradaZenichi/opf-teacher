@@ -28,8 +28,8 @@ P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t} &&
 P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ Q^{\text{BESS}}_{s,t},\ E^{\text{BESS}}_{s,t}
 && &\text{(carga, descarga, reativo e energia do BESS } s)\\
 P^{\text{loss,Q}}_{s,t} && &\text{(perda incremental do inversor BESS)}\\
-P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t}
-&& &\text{(potências ativa, reativa e perda incremental do PV)}
+P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t},\ P^{\text{PV,grid}}_{g,t}
+&& &\text{(potências do PV, perda incremental e consumo da rede)}
 \end{aligned}
 $$
 
@@ -78,7 +78,7 @@ $$
 p^{\text{inj}}_{j,t} =
 \big(P^{\text{grid,imp}}_{j,t} - P^{\text{grid,exp}}_{j,t}\big)\big|_{j=r}
 + \sum_{s \in S_j}\big(P^{\text{BESS,dis}}_{s,t} - P^{\text{BESS,ch}}_{s,t}\big)
-+ \sum_{g \in G_j} P^{\text{PV}}_{g,t}
++ \sum_{g \in G_j}\left(P^{\text{PV}}_{g,t}-P^{\text{PV,grid}}_{g,t}\right)
 - P^{\text{d}}_{j,t}
 $$
 
@@ -198,7 +198,7 @@ Quando a opção é omitida ou falsa, $Q^{\text{BESS}}_{s,t}=0$.
 ### PV, $\forall g \in G,\ t \in T$
 
 $$
-P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}
+P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}-P^{\text{PV,grid}}_{g,t}
 \leq P^{\text{PV,av}}_{g,t}
 \qquad(\text{igualdade se não-curtailável})
 $$
@@ -215,9 +215,21 @@ $$
 \left(\overline S^{\text{PV}}_g\right)^2P^{\text{loss,Q}}_{g,t}.
 $$
 
-No PV, a perda reativa consome parte da potência solar disponível. Como o
-modelo não representa operação noturna alimentada pela rede, uma perda nominal
-positiva impede suporte reativo quando $P^{\text{PV,av}}_{g,t}=0$.
+Durante o dia, a perda reativa consome parte da potência solar disponível. Por
+padrão, $Q^{\text{PV}}_{g,t}=0$ quando
+$P^{\text{PV,av}}_{g,t}=0$. Com `night_var: true`, o PV pode fornecer reativo
+sem sol e:
+
+$$
+P^{\text{PV}}_{g,t}=0,\qquad
+P^{\text{PV,grid}}_{g,t}=P^{\text{loss,Q}}_{g,t}.
+$$
+
+Assim, a perda noturna entra como consumo ativo na barra. O parâmetro
+`q_loss_rated_kw` deve ser positivo quando `night_var` está ativo. A pequena
+potência de perdas não é descontada do limite nominal em kVA para evitar má
+condição numérica; o limite principal continua aplicado a $P^{\text{PV}}$ e
+$Q^{\text{PV}}$.
 
 As duas relações de perda são epígrafes convexas. Com tarifas de energia
 positivas, minimizar o custo também minimiza $P^{\text{loss,Q}}$, fazendo as

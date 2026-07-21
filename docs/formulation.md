@@ -27,8 +27,8 @@ P^{\text{grid,imp}}_{r,t},\ P^{\text{grid,exp}}_{r,t},\ Q^{\text{grid}}_{r,t}
 P^{\text{BESS,ch}}_{s,t},\ P^{\text{BESS,dis}}_{s,t},\ Q^{\text{BESS}}_{s,t},\ E^{\text{BESS}}_{s,t}
 && &\text{(BESS charge, discharge, reactive power, and energy)}\\
 P^{\text{loss,Q}}_{s,t} && &\text{(incremental BESS inverter loss)}\\
-P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t}
-&& &\text{(PV active power, reactive power, and incremental loss)}
+P^{\text{PV}}_{g,t},\ Q^{\text{PV}}_{g,t},\ P^{\text{loss,Q}}_{g,t},\ P^{\text{PV,grid}}_{g,t}
+&& &\text{(PV powers, incremental loss, and grid consumption)}
 \end{aligned}
 $$
 
@@ -78,7 +78,8 @@ $$
 p^{\text inj}_{j,t}=
 \left(P^{\text{grid,imp}}_{j,t}-P^{\text{grid,exp}}_{j,t}\right)\big|_{j=r}
 +\sum_{s\in S_j}\left(P^{\text{BESS,dis}}_{s,t}-P^{\text{BESS,ch}}_{s,t}\right)
-+\sum_{g\in G_j}P^{\text{PV}}_{g,t}-P^{\text d}_{j,t}
++\sum_{g\in G_j}\left(P^{\text{PV}}_{g,t}-P^{\text{PV,grid}}_{g,t}\right)
+-P^{\text d}_{j,t}
 $$
 
 $$
@@ -217,7 +218,7 @@ for discharging.
 ### PV inverter
 
 $$
-P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}
+P^{\text{PV}}_{g,t}+P^{\text{loss,Q}}_{g,t}-P^{\text{PV,grid}}_{g,t}
 \leq P^{\text{PV,av}}_{g,t}
 $$
 
@@ -235,9 +236,21 @@ $$
 \left(\overline S^{\text{PV}}_g\right)^2P^{\text{loss,Q}}_{g,t}.
 $$
 
-For PV, reactive-power loss consumes part of the available solar power. The
-model does not include grid-powered night-VAR operation, so a positive rated
-loss prevents reactive support when $P^{\text{PV,av}}_{g,t}=0$.
+During the day, reactive-power loss consumes part of the available solar
+power. By default, $Q^{\text{PV}}_{g,t}=0$ when
+$P^{\text{PV,av}}_{g,t}=0$. With `night_var: true`, reactive support remains
+available without sunlight and
+
+$$
+P^{\text{PV}}_{g,t}=0,\qquad
+P^{\text{PV,grid}}_{g,t}=P^{\text{loss,Q}}_{g,t}.
+$$
+
+The night-time loss therefore appears as active consumption at the PV bus. A
+positive `q_loss_rated_kw` is required when night VAR is enabled. The small
+loss power is not deducted from the kVA rating to avoid numerical ill
+conditioning; the main rating remains enforced on $P^{\text{PV}}$ and
+$Q^{\text{PV}}$.
 
 Both loss relations are convex epigraphs. With positive energy prices, cost
 minimization also minimizes $P^{\text{loss,Q}}$, so the inequalities are tight

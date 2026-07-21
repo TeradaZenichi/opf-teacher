@@ -15,6 +15,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     base = case.base
     dt = case.dt_h
     T = list(case.periods)
+    previous_period = {T[i]: T[i - 1] for i in range(1, len(T))}
     NR = [b for b in case.buses if b != case.root]
 
     br = {j: case.branches[case.parent_branch[j]] for j in NR}
@@ -39,6 +40,10 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     bess_s = {s.id: base.pu_power(s.s_max_kva) for s in case.bess}
     bess_q_loss = {s.id: base.pu_power(s.q_loss_rated_kw) for s in case.bess}
     pv_q_loss = {g.id: base.pu_power(g.q_loss_rated_kw) for g in case.pv}
+    pv_night = {
+        (g.id, t): g.night_var and pv_avail[g.id][t] <= 0.0
+        for g in case.pv for t in T
+    }
 
     m.T = pyo.Set(initialize=T, ordered=True)
     m.B = pyo.Set(initialize=list(case.buses))
@@ -46,7 +51,6 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.S = pyo.Set(initialize=list(bess))
     m.G = pyo.Set(initialize=list(pv))
 
-    # Volt-Watt usa o limite emergencial de tensão definido em pv_droop.
     v_relax = pv_droop.relaxes_voltage(case)
     def v_bounds(m, b, t):
         if b == case.root:
@@ -92,13 +96,21 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.qpv = pyo.Var(m.G, m.T, bounds=lambda m, g, t: (-pv_s[g], pv_s[g]))
     m.ppv_loss = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals,
                          bounds=lambda m, g, t: (0.0, pv_q_loss[g]))
+    m.ppv_grid_consumption = pyo.Expression(
+        m.G, m.T,
+        rule=lambda m, g, t: m.ppv_loss[g, t] if pv_night[g, t] else 0.0,
+    )
+    m.ppv_net = pyo.Expression(
+        m.G, m.T,
+        rule=lambda m, g, t: m.ppv[g, t] - m.ppv_grid_consumption[g, t],
+    )
 
     def inj_p(m, b, t):
         expr = -pL[b][t]
         for s in bess_at[b]:
             expr += m.pdis[s.id, t] - m.pch[s.id, t]
         for g in pv_at[b]:
-            expr += m.ppv[g.id, t]
+            expr += m.ppv_net[g.id, t]
         if b == case.root:
             expr += m.pimp[t] - m.pexp[t]
         return expr
@@ -127,7 +139,6 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def vdrop(m, j, t):
         i = br[j].from_bus
-        # A impedância do trafo é referida ao lado de envio; em linhas TAP=1.
         return (m.v[j, t] == TAP[j] ** 2 * (
                 m.v[i, t]
                 - 2.0 * (R[j] * m.P[j, t] + X[j] * m.Q[j, t])
@@ -139,7 +150,8 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.pv_capability = pyo.Constraint(m.G, m.T, rule=pv_capability)
 
     def pv_available_power(m, g, t):
-        used = m.ppv[g, t] + m.ppv_loss[g, t]
+        solar_loss = m.ppv_loss[g, t] - m.ppv_grid_consumption[g, t]
+        used = m.ppv[g, t] + solar_loss
         if pv[g].curtailable or pv_droop.is_droop(pv_ctrl[g]):
             return used <= pv_avail[g][t]
         return used == pv_avail[g][t]
@@ -148,6 +160,12 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     def pv_q_loss_rule(m, g, t):
         return pv_q_loss[g] * m.qpv[g, t] ** 2 <= pv_s[g] ** 2 * m.ppv_loss[g, t]
     m.pv_q_loss = pyo.Constraint(m.G, m.T, rule=pv_q_loss_rule)
+
+    def pv_no_night_q_rule(m, g, t):
+        if pv_avail[g][t] > 0.0 or pv[g].night_var:
+            return pyo.Constraint.Skip
+        return m.qpv[g, t] == 0.0
+    m.pv_no_night_q = pyo.Constraint(m.G, m.T, rule=pv_no_night_q_rule)
 
     def bess_capability(m, s, t):
         p_net = m.pdis[s, t] - m.pch[s, t]
@@ -172,7 +190,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
                 - m.pdis[s, t] / d.eta_discharge
                 - m.pbess_loss[s, t]) * dt
         soc0 = d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
-        prev = soc0 if t == T[0] else m.soc[s, T[T.index(t) - 1]]
+        prev = soc0 if t == T[0] else m.soc[s, previous_period[t]]
         return m.soc[s, t] == prev + gain
     m.soc_balance = pyo.Constraint(m.S, m.T, rule=soc_rule)
 
@@ -183,7 +201,6 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         return m.soc[s, T[-1]] == d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
     m.soc_terminal = pyo.Constraint(m.S, rule=soc_cyclic)
 
-    # Evita importação e exportação simultâneas sem variável binária.
     def no_roundtrip(m, t):
         return [m.pimp[t], m.pexp[t]]
     m.no_roundtrip = pyo.SOSConstraint(m.T, rule=no_roundtrip, sos=1)

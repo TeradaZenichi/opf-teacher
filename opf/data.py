@@ -143,6 +143,7 @@ def load_case(path: str | Path) -> Case:
             power_factor=float(d.get("power_factor", 1.0)),
             avail_kw=_load_profile(path, d["profile"], idx),
             q_loss_rated_kw=float(d.get("q_loss_rated_kw", 0.0)),
+            night_var=bool(d.get("night_var", False)),
         )
         for d in dev.get("pv", [])
     ]
@@ -209,6 +210,10 @@ def _validate(case: Case) -> None:
     for device in case.pv:
         if device.q_loss_rated_kw < 0.0:
             raise ValueError(f"PV {device.id!r} cannot have negative q_loss_rated_kw")
+        if device.night_var and device.q_loss_rated_kw <= 0.0:
+            raise ValueError(
+                f"PV {device.id!r} requires positive q_loss_rated_kw for night_var"
+            )
     non_root = [b for b in case.buses if b != case.root]
     for b in non_root:
         if b not in case.parent_branch:

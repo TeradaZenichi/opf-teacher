@@ -124,6 +124,8 @@ print(case.bess[0].result.p_net_kw)
 print(case.bess[0].result.q_kvar)
 print(case.bess[0].result.inverter_loss_kw)
 print(case.pv[0].result.inverter_loss_kw)
+print(case.pv[0].result.p_net_kw)
+print(case.pv[0].result.grid_consumption_kw)
 print(case.grid.result.import_kw)
 print(case.buses[4].result.v_pu)
 ```
@@ -153,7 +155,7 @@ zero. If `s_max_kva` is omitted, it defaults to the largest active-power limit.
 `q_loss_rated_kw` is the incremental active-power loss at
 `abs(q_kvar) == s_max_kva`; the loss scales quadratically with Q. For the BESS,
 this loss is subtracted from stored energy. For PV, it consumes part of the
-available solar power. The default is zero for backward compatibility.
+available solar power. Default: zero.
 
 Per-device loss series are exposed as `result.inverter_loss_kw`; their total
 energy is reported in `case.summary.inverter_losses_kwh`.
@@ -184,8 +186,7 @@ gap relative to branch flow, current error in amperes, and equivalent loss
 error in watts.
 
 This is a numerical and physical tightness check, not a statistical
-probability. The legacy properties `socp_confidence` and
-`socp_confidence_margin` remain available as API aliases.
+probability. `socp_confidence` and `socp_confidence_margin` remain as aliases.
 
 ## PV control
 
@@ -202,6 +203,21 @@ The `control` field accepts:
 All modes enforce the inverter apparent-power rating.
 PV devices also accept `q_loss_rated_kw`. With a nonzero value, reactive-power
 losses reduce the active power available at the AC terminal.
+
+Night-time reactive support is optional:
+
+```json
+{
+  "s_max_kva": 300.0,
+  "q_loss_rated_kw": 3.0,
+  "night_var": true
+}
+```
+
+`night_var` defaults to `false` and requires a positive `q_loss_rated_kw` when
+enabled. At night, the PV supplies Q and imports its inverter loss from the
+grid. The result fields are `grid_consumption_kw` and `p_net_kw`. Supported
+controls are `optimal`, `volt-var`, and `volt-var-watt`.
 
 ## Repository layout
 

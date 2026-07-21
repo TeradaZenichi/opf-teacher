@@ -15,11 +15,7 @@ SHOW_PLOT = False
 
 
 def _aggregate(devices, attr):
-    total = None
-    for d in devices:
-        s = getattr(d.result, attr)
-        total = s.copy() if total is None else total + s
-    return total
+    return sum(getattr(device.result, attr) for device in devices)
 
 
 def plot_results(case: Case, out_path: Path, show: bool):
@@ -77,7 +73,7 @@ def plot_results(case: Case, out_path: Path, show: bool):
     ax = axes[2]
     if case.pv:
         avail = _aggregate(case.pv, "avail_kw")
-        gen = _aggregate(case.pv, "gen_kw")
+        gen = _aggregate(case.pv, "p_net_kw")
         q_pv = _aggregate(case.pv, "q_kvar")
         ax.fill_between(t, avail, color="gold", alpha=0.4, label="PV available")
         ax.step(t, gen, where="mid", color="darkorange", lw=2,

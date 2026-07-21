@@ -50,10 +50,13 @@ class BessResult:
 
 class PvResult:
     def __init__(self, avail_kw, gen_kw, curtail_kw, q_kvar,
-                 inverter_loss_kw=None):
+                 inverter_loss_kw=None, p_net_kw=None,
+                 grid_consumption_kw=None):
         self.avail_kw, self.gen_kw, self.curtail_kw = avail_kw, gen_kw, curtail_kw
         self.q_kvar = q_kvar
         self.inverter_loss_kw = inverter_loss_kw
+        self.p_net_kw = p_net_kw
+        self.grid_consumption_kw = grid_consumption_kw
 
 
 class Bus:
@@ -133,11 +136,13 @@ class Bess:
 
 class Pv:
     def __init__(self, id, bus, p_max_kw, s_max_kva, control, curtailable,
-                 power_factor, avail_kw, q_loss_rated_kw=0.0):
+                 power_factor, avail_kw, q_loss_rated_kw=0.0,
+                 night_var=False):
         self.id, self.bus, self.p_max_kw, self.s_max_kva = id, bus, p_max_kw, s_max_kva
         self.control, self.curtailable, self.power_factor = control, curtailable, power_factor
         self.avail_kw = avail_kw
         self.q_loss_rated_kw = q_loss_rated_kw
+        self.night_var = night_var
         self.result = None
 
 
@@ -166,12 +171,10 @@ class Summary:
 
     @property
     def socp_confidence_margin(self):
-        """Alias mantido para consumidores da API anterior."""
         return self.socp_tightness_margin
 
     @property
     def socp_confidence(self):
-        """Alias mantido para consumidores da API anterior."""
         return self.socp_tightness
 
     def as_dict(self): return dict(self.__dict__)
