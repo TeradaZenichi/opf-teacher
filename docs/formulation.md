@@ -271,6 +271,6 @@ $$
 An SOS1 constraint prevents simultaneous import and export:
 
 $$
-\text{SOS1}\left(\left\{P^{\text{grid,imp}}_{r,t},
-P^{\text{grid,exp}}_{r,t}\right\}\right),\qquad \forall t\in T.
+\text{SOS1}(\{P^{\text{grid,imp}}_{r,t},
+P^{\text{grid,exp}}_{r,t}\}),\qquad \forall t\in T.
 $$
