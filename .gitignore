@@ -19,3 +19,4 @@ gurobi.lic
 *.lp
 *.mps
 figures/
+.agents/
