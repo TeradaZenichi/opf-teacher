@@ -1,0 +1,2 @@
+formulation,status,objective_cost,energy_cost,energy_import_kwh,energy_export_kwh,pv_generated_kwh,pv_curtailed_kwh,losses_kwh,v_min_pu,v_max_pu,socp_tightness,socp_relaxation_tight,inverter_losses_kwh
+active_power_lindistflow,optimal,6108.144227294736,6108.133684210527,10130.542105263157,0.0,1770.0,0.0,0.0,0.9849805971995104,1.0003140002886861,not_applicable,False,0.0

@@ -32,6 +32,7 @@ OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
 SOLVER = "gurobi_direct"
 SOCP_GAP_TOLERANCE = 1e-5
 SHOW_PLOT = False
+ACTIVE_POWER_ONLY = True
 ```
 
 Run:
@@ -39,6 +40,42 @@ Run:
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
+
+With `ACTIVE_POWER_ONLY = True`, `main.py` also writes the devices, buses,
+branches, and summary CSVs under `results/`.
+
+## Active-power CSV export
+
+An active-power-only LinDistFlow variant is available for producing a simple
+teacher trajectory. It optimizes grid exchange, BESS charge/discharge, BESS
+state of charge, PV generation, branch active flows, and bus voltage
+magnitudes. Reactive power and network losses are omitted from this linear
+formulation.
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_active_power_opf.py
+```
+
+Outputs:
+
+```text
+results/case5_active_power_opf_devices.csv
+results/case5_active_power_opf_buses.csv
+results/case5_active_power_opf_branches.csv
+results/case5_active_power_opf_summary.csv
+```
+
+Each CSV uses one row per timestep and one column per measured quantity. The
+device CSV contains BESS powers and state of charge, plus PV availability,
+generation, and curtailment. The bus CSV contains loads, voltages, load
+currents, prices, and grid exchange. The branch CSV contains active and
+reactive flows, branch currents, and losses.
+
+Device net active power follows `p_net_kw = power received from the grid -
+power injected into the grid`. Therefore, positive values represent net
+consumption and negative values represent net injection.
 
 ## Input files
 

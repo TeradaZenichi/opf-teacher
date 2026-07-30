@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from opf.active_model import solve_active_power_opf
 from opf.components import Case
+from opf.data import load_case
+from opf.export import write_result_csvs
 from teacher import BessOpt
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CASE_PATH = PROJECT_ROOT / "examples" / "case5"
 OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
+RESULTS_PATH = PROJECT_ROOT / "results"
 SOLVER = "gurobi_direct"
 SOCP_GAP_TOLERANCE = 1e-5
 SHOW_PLOT = False
+ACTIVE_POWER_ONLY = True
 
 
 def _aggregate(devices, attr):
@@ -123,11 +128,20 @@ def print_summary(case: Case):
 
 
 def main():
-    case = BessOpt(CASE_PATH).build().solve(
-        solver=SOLVER,
-        socp_gap_tolerance=SOCP_GAP_TOLERANCE,
-    )
+    if ACTIVE_POWER_ONLY:
+        case = solve_active_power_opf(load_case(CASE_PATH))
+        result_stem = f"{case.name}_active_power_opf"
+    else:
+        case = BessOpt(CASE_PATH).build().solve(
+            solver=SOLVER,
+            socp_gap_tolerance=SOCP_GAP_TOLERANCE,
+        )
+        result_stem = f"{case.name}_opf"
+
+    csv_paths = write_result_csvs(case, RESULTS_PATH, stem=result_stem)
     print_summary(case)
+    for name, path in csv_paths.items():
+        print(f"{name} CSV saved to: {path}")
     plot_results(case, OUTPUT_PATH, SHOW_PLOT)
 
 
