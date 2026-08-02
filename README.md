@@ -104,6 +104,10 @@ examples/case5/
 Input units are kW, kVAr, kWh, ohm, and kV. Conversion to per unit is performed
 when the Pyomo model is built.
 
+The reference `case5` is the single-phase equivalent of a balanced three-phase
+system. Its kW and kVAr values are system totals, while line currents follow the
+single-phase equivalent used by its OpenDSS model.
+
 The network path and slack bus are configured in `config.json`:
 
 ```json
@@ -129,7 +133,8 @@ explicitly:
 Supported network elements:
 
 - radial topology;
-- three-phase lines using `R1`, `X1`, `Length`, and `NormAmps`;
+- single-phase equivalent or balanced three-phase lines using `R1`, `X1`,
+  `Length`, and `NormAmps`;
 - three-phase, two-winding transformers;
 - transformer `kV`, `kVA`, `%R`, `XHL`, connection, and fixed tap;
 - multiple voltage levels.

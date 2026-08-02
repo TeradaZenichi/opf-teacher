@@ -10,6 +10,9 @@ import opf.pv_droop as pv_droop
 import opf.pv_optimal as pv_optimal
 
 
+THERMAL_LIMIT_NUMERICAL_MARGIN = 1e-10
+
+
 def build_model(case: Case) -> pyo.ConcreteModel:
     m = pyo.ConcreteModel(name=case.name)
     base = case.base
@@ -23,7 +26,13 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     R = {j: RX[j][0] for j in NR}
     X = {j: RX[j][1] for j in NR}
     TAP = {j: br[j].tap_ratio for j in NR}
-    L_MAX = {j: base.pu_power(br[j].s_max_kva) ** 2 for j in NR}
+    L_MAX = {
+        j: (
+            base.pu_power(br[j].s_max_kva)
+            * (1.0 + THERMAL_LIMIT_NUMERICAL_MARGIN)
+        ) ** 2
+        for j in NR
+    }
 
     pL = {b: base.pu_power(case.buses[b].p_load_kw.to_numpy()) for b in case.buses}
     qL = {b: base.pu_power(case.buses[b].q_load_kw.to_numpy()) for b in case.buses}

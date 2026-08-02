@@ -1,6 +1,6 @@
 {
   "name": "case5",
-  "description": "Feeder radial de distribuicao, 5 barras, 1 BESS e 1 PV",
+  "description": "Equivalente monofasico de feeder trifasico balanceado, 5 barras, 1 BESS e 1 PV",
   "base": {
     "s_base_kva": 1000.0,
     "v_base_kv": 11.0

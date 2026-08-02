@@ -227,16 +227,21 @@ class Case5Test(unittest.TestCase):
         self.assertEqual(len(case.buses), 5)
         self.assertEqual(len(case.branches), 4)
         expected = {
-            (1, 2): (1.0, 2.0, 1500.0),
-            (2, 3): (2.0, 3.0, 1000.0),
-            (3, 4): (2.4, 3.2, 600.0),
-            (2, 5): (2.0, 2.6, 800.0),
+            (1, 2): (1.0, 2.0, 11.0 * 78.7295821622217),
+            (2, 3): (2.0, 3.0, 11.0 * 52.4863881081478),
+            (3, 4): (2.4, 3.2, 11.0 * 31.4918328648887),
+            (2, 5): (2.0, 2.6, 11.0 * 41.9891104865182),
         }
+        self.assertTrue(all(bus.phases == (1,) for bus in case.buses.values()))
         for branch in case.branches:
             r, x, s_max = expected[(branch.from_bus, branch.to_bus)]
+            self.assertEqual(branch.phases, (1,))
             self.assertAlmostEqual(branch.r_ohm, r)
             self.assertAlmostEqual(branch.x_ohm, x)
             self.assertAlmostEqual(branch.s_max_kva, s_max)
+        r_pu, x_pu = case.branches[0].impedance_pu(case.base, case.buses[1])
+        self.assertAlmostEqual(r_pu, 1.0 / 121.0)
+        self.assertAlmostEqual(x_pu, 2.0 / 121.0)
         bess = case.bess[0]
         self.assertTrue(bess.reactive_control)
         self.assertEqual(bess.e_cap_kwh, 100.0)

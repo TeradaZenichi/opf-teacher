@@ -20,3 +20,4 @@ gurobi.lic
 *.mps
 figures/
 .agents/
+powerflow-opendss-environment/

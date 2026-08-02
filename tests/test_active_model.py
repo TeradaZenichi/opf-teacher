@@ -35,6 +35,17 @@ class ActivePowerOpfTest(unittest.TestCase):
         self.assertIn("bus_004_load_current_a", buses)
         self.assertIn("line_001_002_p_kw", branches)
         self.assertIn("line_001_002_current_a", branches)
+        branch = case.branches[0]
+        p_kw = float(branch.result.p_kw.iloc[0])
+        q_kvar = float(branch.result.q_kvar.iloc[0])
+        voltage_pu = float(case.buses[branch.from_bus].result.v_pu.iloc[0])
+        expected_current_a = (p_kw ** 2 + q_kvar ** 2) ** 0.5 / (
+            case.base.v_base_kv * voltage_pu
+        )
+        self.assertAlmostEqual(
+            float(branches["line_001_002_current_a"].iloc[0]),
+            expected_current_a,
+        )
         self.assertAlmostEqual(float(case.bess[0].result.q_kvar.abs().max()), 0.0)
         self.assertAlmostEqual(float(case.pv[0].result.q_kvar.abs().max()), 0.0)
         self.assertAlmostEqual(

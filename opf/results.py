@@ -8,6 +8,7 @@ import pyomo.environ as pyo
 
 from opf.components import (
     BessResult, BranchResult, BusResult, Case, GridResult, PvResult, Summary,
+    phase_power_factor, system_voltage_base_kv,
 )
 
 
@@ -35,9 +36,14 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
     for j in (bus for bus in case.buses if bus != case.root):
         branch = case.branches[case.parent_branch[j]]
         from_bus = case.buses[branch.from_bus]
-        kv_ln = float(from_bus.kv_base_ln or 0.0)
-        v_base_ll_kv = math.sqrt(3.0) * kv_ln if kv_ln > 0.0 else case.base.v_base_kv
-        i_base_a = case.base.s_base_kva / (math.sqrt(3.0) * v_base_ll_kv)
+        voltage_base_kv = system_voltage_base_kv(
+            from_bus.kv_base_ln,
+            branch.phases,
+            case.base.v_base_kv,
+        )
+        i_base_a = case.base.s_base_kva / (
+            phase_power_factor(branch.phases) * voltage_base_kv
+        )
         r_pu, _ = branch.impedance_pu(case.base, from_bus)
         gap_values = []
         normalized = []

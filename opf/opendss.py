@@ -357,10 +357,10 @@ def _read_lines(
         length = float(dss.lines.length)
         units = dss.lines.units
         n_phases = int(getattr(dss.lines, "phases", 3) or 3)
-        if n_phases != 3:
+        if n_phases not in {1, 3}:
             raise ValueError(
                 f"Line {name!r} has {n_phases} phase(s); the current balanced "
-                "positive-sequence adapter supports only three-phase lines"
+                "adapter supports single-phase equivalents or three-phase lines"
             )
         phases = _terminal_phases(bus1_raw, n_phases)
         r_ohm = float(dss.lines.r1) * length
@@ -374,7 +374,9 @@ def _read_lines(
 
         kv_ln = bus_by_id[bus1].kv_base_ln
         if kv_ln > 0.0:
-            s_max_kva = n_phases * kv_ln * norm_amps
+            voltage_base_kv = math.sqrt(3.0) * kv_ln
+            power_factor = 1.0 if n_phases == 1 else math.sqrt(3.0)
+            s_max_kva = power_factor * voltage_base_kv * norm_amps
         elif fallback_v_base_kv is not None:
             factor = math.sqrt(3.0) if n_phases >= 3 else 1.0
             s_max_kva = factor * float(fallback_v_base_kv) * norm_amps

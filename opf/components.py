@@ -4,6 +4,33 @@ import math
 import pandas as pd
 
 
+def phase_count(phases) -> int:
+    """Return the supported electrical phase count, defaulting to balanced 3-phase."""
+    count = len(tuple(phases or ())) or 3
+    if count not in {1, 3}:
+        raise ValueError(
+            f"Unsupported phase count {count}; use a single-phase equivalent "
+            "or a balanced three-phase representation"
+        )
+    return count
+
+
+def phase_power_factor(phases) -> float:
+    """Factor relating terminal voltage and current to total apparent power."""
+    return 1.0 if phase_count(phases) == 1 else math.sqrt(3.0)
+
+
+def system_voltage_base_kv(kv_base: float | None, phases, fallback_kv: float) -> float:
+    """Return the system voltage base used by the balanced equivalent."""
+    phase_count(phases)
+    bus_kv = float(kv_base or 0.0)
+    if bus_kv <= 0.0:
+        return float(fallback_kv)
+    # OpenDSS Bus.kVBase is line-neutral after CalcVoltageBases, including for
+    # the one-phase proxy of a balanced circuit whose configured base is V_LL.
+    return math.sqrt(3.0) * bus_kv
+
+
 class Base:
     """Bases do sistema e conversões para pu."""
 
@@ -103,9 +130,12 @@ class Branch:
             scale = base.s_base_kva / self.impedance_base_kva
             return self.r_pu_on_rating * scale, self.x_pu_on_rating * scale
 
-        kv_ln = float(from_bus.kv_base_ln or 0.0)
-        v_base_ll_kv = math.sqrt(3.0) * kv_ln if kv_ln > 0.0 else base.v_base_kv
-        z_base_ohm = v_base_ll_kv ** 2 * 1e3 / base.s_base_kva
+        voltage_base_kv = system_voltage_base_kv(
+            from_bus.kv_base_ln,
+            self.phases,
+            base.v_base_kv,
+        )
+        z_base_ohm = voltage_base_kv ** 2 * 1e3 / base.s_base_kva
         return self.r_ohm / z_base_ohm, self.x_ohm / z_base_ohm
 
 

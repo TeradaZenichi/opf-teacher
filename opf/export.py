@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import re
-import math
 from pathlib import Path
 
 import pandas as pd
 
-from opf.components import Case
+from opf.components import (
+    Case,
+    phase_power_factor,
+    system_voltage_base_kv,
+)
 
 
 def _column_token(value: object) -> str:
@@ -27,11 +30,12 @@ def _line_current_a(
     p_kw: pd.Series,
     q_kvar: pd.Series,
     v_pu: pd.Series,
-    v_base_ll_kv: float,
+    voltage_base_kv: float,
+    phases,
 ) -> pd.Series:
     apparent_kva = (p_kw.pow(2) + q_kvar.pow(2)).pow(0.5)
-    voltage_ll_kv = v_base_ll_kv * v_pu.clip(lower=1e-9)
-    return apparent_kva / (math.sqrt(3.0) * voltage_ll_kv)
+    voltage_kv = voltage_base_kv * v_pu.clip(lower=1e-9)
+    return apparent_kva / (phase_power_factor(phases) * voltage_kv)
 
 
 def timeseries_dataframe(case: Case) -> pd.DataFrame:
@@ -143,17 +147,17 @@ def buses_dataframe(case: Case) -> pd.DataFrame:
     for bus_id in sorted(case.buses):
         bus = case.buses[bus_id]
         token = _column_token(bus.name)
-        kv_ln = float(bus.kv_base_ln or 0.0)
-        v_base_ll_kv = (
-            math.sqrt(3.0) * kv_ln
-            if kv_ln > 0.0
-            else case.base.v_base_kv
+        voltage_base_kv = system_voltage_base_kv(
+            bus.kv_base_ln,
+            bus.phases,
+            case.base.v_base_kv,
         )
         load_current = _line_current_a(
             bus.p_load_kw,
             bus.q_load_kw,
             bus.result.v_pu,
-            v_base_ll_kv,
+            voltage_base_kv,
+            bus.phases,
         )
         frame[f"{token}_voltage_pu"] = bus.result.v_pu.to_numpy()
         frame[f"{token}_p_load_kw"] = bus.p_load_kw.to_numpy()
@@ -174,17 +178,17 @@ def branches_dataframe(case: Case) -> pd.DataFrame:
         )
         result = branch.result
         from_bus = case.buses[branch.from_bus]
-        kv_ln = float(from_bus.kv_base_ln or 0.0)
-        v_base_ll_kv = (
-            math.sqrt(3.0) * kv_ln
-            if kv_ln > 0.0
-            else case.base.v_base_kv
+        voltage_base_kv = system_voltage_base_kv(
+            from_bus.kv_base_ln,
+            branch.phases,
+            case.base.v_base_kv,
         )
         current = _line_current_a(
             result.p_kw,
             result.q_kvar,
             from_bus.result.v_pu,
-            v_base_ll_kv,
+            voltage_base_kv,
+            branch.phases,
         )
         frame[f"{token}_p_kw"] = result.p_kw.to_numpy()
         frame[f"{token}_q_kvar"] = result.q_kvar.to_numpy()
