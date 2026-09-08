@@ -1,4 +1,4 @@
-"""Leitura dos arquivos de entrada."""
+"""Load network data, device settings and time series."""
 from __future__ import annotations
 
 import json
@@ -36,8 +36,7 @@ def load_case(path: str | Path) -> Case:
     def case_bus(value) -> int:
         return resolve_bus_id(value, bus_name_to_id)
 
-    dem = (pd.read_csv(path / "demand.csv", parse_dates=["timestamp"])
-           .sort_values("timestamp").reset_index(drop=True))
+    dem = (pd.read_csv(path / "demand.csv", parse_dates=["timestamp"]) .sort_values("timestamp").reset_index(drop=True))
     idx = pd.DatetimeIndex(dem["timestamp"])
     p_load, q_load = {}, {}
     for col in dem.columns:
@@ -105,8 +104,7 @@ def load_case(path: str | Path) -> Case:
         feed_in_ratio=float(g.get("feed_in_tariff_ratio", 1.0)),
     )
 
-    price_df = (pd.read_csv(path / "price.csv", parse_dates=["timestamp"])
-                .sort_values("timestamp"))
+    price_df = (pd.read_csv(path / "price.csv", parse_dates=["timestamp"]) .sort_values("timestamp"))
     price = pd.Series(price_df["price_per_kwh"].to_numpy(), index=idx)
 
     dev = _read_json(path / "devices.json") if (path / "devices.json").exists() else {}
@@ -123,10 +121,8 @@ def load_case(path: str | Path) -> Case:
             soc_min_frac=float(d.get("soc_min_frac", 0.0)),
             soc_max_frac=float(d.get("soc_max_frac", 1.0)),
             cyclic_soc=bool(d.get("cyclic_soc", True)),
-            s_max_kva=float(d.get(
-                "s_max_kva",
-                max(float(d["p_charge_max_kw"]), float(d["p_discharge_max_kw"])),
-            )),
+            soc_terminal_frac=(float(d["soc_terminal_frac"]) if d.get("soc_terminal_frac") is not None else None),
+            s_max_kva=float(d.get("s_max_kva", max(float(d["p_charge_max_kw"]), float(d["p_discharge_max_kw"])))),
             reactive_control=bool(d.get("reactive_control", False)),
             q_loss_rated_kw=float(d.get("q_loss_rated_kw", 0.0)),
         )
@@ -178,10 +174,9 @@ def _infer_dt_hours(idx: pd.DatetimeIndex) -> float:
 
 
 def _load_profile(path: Path, ref: str, idx: pd.DatetimeIndex) -> pd.Series:
-    """Lê uma referência no formato arquivo.csv:coluna."""
+    """Read a profile referenced as file.csv:column."""
     fname, _, col = ref.partition(":")
-    df = (pd.read_csv(path / fname, parse_dates=["timestamp"])
-          .sort_values("timestamp"))
+    df = (pd.read_csv(path / fname, parse_dates=["timestamp"]) .sort_values("timestamp"))
     return pd.Series(df[col].to_numpy(), index=idx)
 
 
@@ -199,10 +194,12 @@ def _validate(case: Case) -> None:
         raise ValueError(f"Grid bus {case.root} is not present in the network")
     for device in [*case.bess, *case.pv]:
         if device.bus not in case.buses:
-            raise ValueError(
-                f"Device {device.id!r} references bus {device.bus}, which is not in the network"
-            )
+            raise ValueError(f"Device {device.id!r} references bus {device.bus}, which is not in the network")
     for device in case.bess:
+        if device.soc_terminal_frac is not None and not (
+            device.soc_min_frac <= device.soc_terminal_frac <= device.soc_max_frac
+        ):
+            raise ValueError(f"BESS {device.id!r} terminal SoC is outside limits")
         if device.s_max_kva <= 0.0:
             raise ValueError(f"BESS {device.id!r} must have a positive s_max_kva")
         if device.q_loss_rated_kw < 0.0:
@@ -211,9 +208,7 @@ def _validate(case: Case) -> None:
         if device.q_loss_rated_kw < 0.0:
             raise ValueError(f"PV {device.id!r} cannot have negative q_loss_rated_kw")
         if device.night_var and device.q_loss_rated_kw <= 0.0:
-            raise ValueError(
-                f"PV {device.id!r} requires positive q_loss_rated_kw for night_var"
-            )
+            raise ValueError(f"PV {device.id!r} requires positive q_loss_rated_kw for night_var")
     non_root = [b for b in case.buses if b != case.root]
     for b in non_root:
         if b not in case.parent_branch:

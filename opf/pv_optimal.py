@@ -1,4 +1,4 @@
-"""Controles optimal e fixed_pf do inversor fotovoltaico."""
+"""Optimal and fixed-power-factor PV controls."""
 import pyomo.environ as pyo
 
 MODES = ("optimal", "fixed_pf")

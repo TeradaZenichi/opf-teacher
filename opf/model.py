@@ -1,4 +1,4 @@
-"""Modelo DistFlow com relaxação SOCP."""
+"""DistFlow model with an SOCP relaxation."""
 from __future__ import annotations
 
 import math
@@ -26,13 +26,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     R = {j: RX[j][0] for j in NR}
     X = {j: RX[j][1] for j in NR}
     TAP = {j: br[j].tap_ratio for j in NR}
-    L_MAX = {
-        j: (
-            base.pu_power(br[j].s_max_kva)
-            * (1.0 + THERMAL_LIMIT_NUMERICAL_MARGIN)
-        ) ** 2
-        for j in NR
-    }
+    L_MAX = {j: (base.pu_power(br[j].s_max_kva) * (1.0 + THERMAL_LIMIT_NUMERICAL_MARGIN)) ** 2 for j in NR}
 
     pL = {b: base.pu_power(case.buses[b].p_load_kw.to_numpy()) for b in case.buses}
     qL = {b: base.pu_power(case.buses[b].q_load_kw.to_numpy()) for b in case.buses}
@@ -49,10 +43,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     bess_s = {s.id: base.pu_power(s.s_max_kva) for s in case.bess}
     bess_q_loss = {s.id: base.pu_power(s.q_loss_rated_kw) for s in case.bess}
     pv_q_loss = {g.id: base.pu_power(g.q_loss_rated_kw) for g in case.pv}
-    pv_night = {
-        (g.id, t): g.night_var and pv_avail[g.id][t] <= 0.0
-        for g in case.pv for t in T
-    }
+    pv_night = {(g.id, t): g.night_var and pv_avail[g.id][t] <= 0.0 for g in case.pv for t in T}
 
     m.T = pyo.Set(initialize=T, ordered=True)
     m.B = pyo.Set(initialize=list(case.buses))
@@ -70,8 +61,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     m.P = pyo.Var(m.J, m.T)
     m.Q = pyo.Var(m.J, m.T)
-    m.l = pyo.Var(m.J, m.T, domain=pyo.NonNegativeReals,
-                  bounds=lambda m, j, t: (0.0, L_MAX[j]))
+    m.l = pyo.Var(m.J, m.T, domain=pyo.NonNegativeReals, bounds=lambda m, j, t: (0.0, L_MAX[j]))
 
     m.pimp = pyo.Var(m.T, bounds=(0.0, base.pu_power(case.grid.p_import_max_kw)))
     m.pexp = pyo.Var(m.T, bounds=(0.0, base.pu_power(case.grid.p_export_max_kw)))
@@ -87,10 +77,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         bess_s[s] if bess[s].reactive_control else 0.0,
     ))
     m.pbess_loss = pyo.Var(m.S, m.T, domain=pyo.NonNegativeReals,
-                           bounds=lambda m, s, t: (
-                               0.0,
-                               bess_q_loss[s] if bess[s].reactive_control else 0.0,
-                           ))
+                           bounds=lambda m, s, t: (0.0, bess_q_loss[s] if bess[s].reactive_control else 0.0))
     m.soc = pyo.Var(m.S, m.T, bounds=lambda m, s, t: (
         bess[s].soc_min_frac * base.pu_energy(bess[s].e_cap_kwh),
         bess[s].soc_max_frac * base.pu_energy(bess[s].e_cap_kwh),
@@ -103,16 +90,9 @@ def build_model(case: Case) -> pyo.ConcreteModel:
         return (0.0, avail)
     m.ppv = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals, bounds=ppv_bounds)
     m.qpv = pyo.Var(m.G, m.T, bounds=lambda m, g, t: (-pv_s[g], pv_s[g]))
-    m.ppv_loss = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals,
-                         bounds=lambda m, g, t: (0.0, pv_q_loss[g]))
-    m.ppv_grid_consumption = pyo.Expression(
-        m.G, m.T,
-        rule=lambda m, g, t: m.ppv_loss[g, t] if pv_night[g, t] else 0.0,
-    )
-    m.ppv_net = pyo.Expression(
-        m.G, m.T,
-        rule=lambda m, g, t: m.ppv[g, t] - m.ppv_grid_consumption[g, t],
-    )
+    m.ppv_loss = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals, bounds=lambda m, g, t: (0.0, pv_q_loss[g]))
+    m.ppv_grid_consumption = pyo.Expression(m.G, m.T, rule=lambda m, g, t: m.ppv_loss[g, t] if pv_night[g, t] else 0.0)
+    m.ppv_net = pyo.Expression(m.G, m.T, rule=lambda m, g, t: m.ppv[g, t] - m.ppv_grid_consumption[g, t])
 
     def inj_p(m, b, t):
         expr = -pL[b][t]
@@ -182,8 +162,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
     m.bess_capability = pyo.Constraint(m.S, m.T, rule=bess_capability)
 
     def bess_q_loss_rule(m, s, t):
-        return (bess_q_loss[s] * m.qbess[s, t] ** 2
-                <= bess_s[s] ** 2 * m.pbess_loss[s, t])
+        return (bess_q_loss[s] * m.qbess[s, t] ** 2 <= bess_s[s] ** 2 * m.pbess_loss[s, t])
     m.bess_q_loss = pyo.Constraint(m.S, m.T, rule=bess_q_loss_rule)
 
     pv_optimal.add(m, pv, pv_ctrl, pv_qratio, T)
@@ -195,9 +174,7 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def soc_rule(m, s, t):
         d = bess[s]
-        gain = (d.eta_charge * m.pch[s, t]
-                - m.pdis[s, t] / d.eta_discharge
-                - m.pbess_loss[s, t]) * dt
+        gain = (d.eta_charge * m.pch[s, t] - m.pdis[s, t] / d.eta_discharge - m.pbess_loss[s, t]) * dt
         soc0 = d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
         prev = soc0 if t == T[0] else m.soc[s, previous_period[t]]
         return m.soc[s, t] == prev + gain
@@ -205,9 +182,10 @@ def build_model(case: Case) -> pyo.ConcreteModel:
 
     def soc_cyclic(m, s):
         d = bess[s]
-        if not d.cyclic_soc:
+        if not d.cyclic_soc and d.soc_terminal_frac is None:
             return pyo.Constraint.Skip
-        return m.soc[s, T[-1]] == d.soc_init_frac * base.pu_energy(d.e_cap_kwh)
+        target = d.soc_init_frac if d.soc_terminal_frac is None else d.soc_terminal_frac
+        return m.soc[s, T[-1]] == target * base.pu_energy(d.e_cap_kwh)
     m.soc_terminal = pyo.Constraint(m.S, rule=soc_cyclic)
 
     def no_roundtrip(m, t):

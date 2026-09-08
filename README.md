@@ -176,6 +176,124 @@ The BESS sign convention is `p_net_kw > 0` for charging and `p_net_kw < 0`
 for discharging. Reactive power uses `q_kvar > 0` for injection and
 `q_kvar < 0` for absorption.
 
+## Teacher state-action pairs
+
+Run `python example.py` to compare two independent five-bus scenarios:
+
+- `examples/case5_central`: BESS `b1` at bus 4 and `b2` at bus 2;
+  PV `pv1` at bus 5 and `pv2` at bus 3. Central X includes every bus and
+  device; Y contains all four devices. The second PV profile is half the first.
+- `examples/case5_local`: only BESS `b1` at bus 4, with no PV.
+  Local X contains bus 4 and battery state; Y contains only battery commands.
+
+Both use the reference topology, demand and prices. The example uses HiGHS
+with active power only and illustrative pre-action voltages of 1 pu.
+Each pair labels only the first interval, and each teacher solves its full
+network even when the student's observation is local.
+
+`Teacher` uses the existing `Case`, `Bus`, `Bess`, `Pv`, and `Grid` objects.
+`BessOpt` remains available with the same build/solve usage. Components now
+have `.state` for pre-action observations; BESS and PV also have `.action`
+for the first optimal command. `.result` still contains the full predicted
+trajectory. Grid exchange is a result, not a controllable device action.
+
+The integration/training repository supplies observations from its environment:
+
+```python
+from teacher import Teacher
+from opf import BusState, BessState, PvState
+
+
+def label_horizon(case, bus_states, bess_states, pv_states):
+    teacher = Teacher(case, active_power_only=True)
+    solved = teacher.observe(
+        buses=bus_states,       # {integer bus ID: BusState(...)}
+        bess=bess_states,       # {device ID: BessState(...)}
+        pv=pv_states,           # {device ID: PvState(...)}
+    ).solve()                  # HiGHS for active mode; Gurobi for full mode
+
+    central_x, central_y = solved.state_action()
+    local_pairs = {
+        "bess": {d.id: d.state_action(solved.buses[d.bus]) for d in solved.bess},
+        "pv": {d.id: d.state_action(solved.buses[d.bus]) for d in solved.pv},
+    }
+    return (central_x, central_y), local_pairs, solved.summary
+```
+
+Observation constructors (scalar values for one instant):
+
+- `BusState(v_before_pu, p_load_kw, q_load_kvar)`;
+- `BessState(soc_before_frac, previous_p_kw, previous_q_kvar)`;
+- `PvState(available_kw, previous_p_kw, previous_q_kvar)`.
+
+`observe()` requires every bus and device, including empty dictionaries when
+a device type is absent. Bus IDs are the integer keys of `case.buses`; the
+loader exposes `case.bus_name_to_id` for converting OpenDSS names. Previous
+BESS P is positive for charging; previous PV P uses net injection at its AC
+terminal; previous device Q is positive for injection.
+
+All observations must refer to the **first timestamp of the supplied Case**.
+`observe()` updates the first load/PV profile values and initial BESS SoC,
+invalidates previous solutions, and leaves later profile values as forecasts.
+It does not advance time or calculate a power flow. The caller supplies a new
+Case with the next horizon when advancing the episode. Pre-action voltage
+must be measured or calculated by the environment with the prior applied
+commands; it is never inferred from optimized voltage or fixed in the OPF.
+
+The optional BESS parameter `soc_terminal_frac` specifies an end-of-horizon
+target even when `cyclic_soc` is false. Without an explicit target, ordinary
+solves retain the existing cyclic behavior. When observing a new SoC in a
+cyclic case, `observe()` preserves the original initial SoC as the terminal
+target. Set a new target explicitly when changing the terminal policy.
+
+`state_action()` returns named dictionaries, not normalized vectors:
+
+- Central X: timestamp, dt, all buses, BESS/PV states and grid tariffs.
+- Central Y: BESS and PV action dictionaries keyed by device ID.
+- Local X: only the connected bus state and the device's own state.
+- Local Y: `p_net_kw`/`q_injection_kvar` for BESS, or
+  `generation_kw`/`q_injection_kvar` for PV. PV generation is positive;
+  nighttime grid consumption is calculated separately by the environment.
+
+Local pairs intentionally exclude tariffs, forecasts and other devices.
+The training repository may add information available to its controller,
+including time, terminal targets and forecast windows. These extra features
+are especially relevant to reproduce a teacher that sees the full horizon.
+It also owns vector ordering, normalization and dataset storage. Local
+labels remain actions from a global optimization, not a separately optimized
+local policy.
+
+Only optimal/locally optimal solver terminations produce actions. This first
+interface does not certify AC feasibility, SOCP tightness, or replay equality;
+use the returned summary and an OpenDSS replay to accept training labels.
+
+## Temporal pairs
+
+`TemporalTeacher` builds a sliding window from successive state-action pairs.
+It accepts either central or local dictionaries and keeps the current action
+as the target. Use one instance per episode/controller stream.
+
+```python
+from teacher import TemporalTeacher
+
+temporal = TemporalTeacher(window=3)
+
+# At each observed step, after solving the corresponding horizon:
+x, y = case.state_action()  # Or battery.state_action(case.buses[battery.bus])
+pair = temporal.append(x, y)
+if pair is not None:
+    x_history, y_current = pair
+    # x_history = [x_t_minus_2, x_t_minus_1, x_t]
+
+# Before starting another episode:
+temporal.reset()
+```
+
+The first `window - 1` calls return `None`. Returned pairs are independent
+copies. The caller supplies observations in chronological order at the chosen
+sampling interval; the class does not check timestamps or advance the environment.
+Do not fill the window with the OPF's predicted future trajectory.
+
 ## BESS inverter
 
 Reactive-power control is configured per BESS in `devices.json`:

@@ -1,4 +1,4 @@
-"""Conversão da solução Pyomo para as unidades do caso."""
+"""Convert Pyomo results to physical units and check the SOCP gap."""
 from __future__ import annotations
 
 import math
@@ -22,7 +22,7 @@ def _val(x) -> float:
 
 
 def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE):
-    """Calcula o resíduo da igualdade relaxada P² + Q² = v*l."""
+    """Measure the residual of the relaxed equality P**2 + Q**2 = v*l."""
     if tolerance <= 0.0:
         raise ValueError("SOCP gap tolerance must be positive")
 
@@ -36,14 +36,8 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
     for j in (bus for bus in case.buses if bus != case.root):
         branch = case.branches[case.parent_branch[j]]
         from_bus = case.buses[branch.from_bus]
-        voltage_base_kv = system_voltage_base_kv(
-            from_bus.kv_base_ln,
-            branch.phases,
-            case.base.v_base_kv,
-        )
-        i_base_a = case.base.s_base_kva / (
-            phase_power_factor(branch.phases) * voltage_base_kv
-        )
+        voltage_base_kv = system_voltage_base_kv(from_bus.kv_base_ln, branch.phases, case.base.v_base_kv)
+        i_base_a = case.base.s_base_kva / (phase_power_factor(branch.phases) * voltage_base_kv)
         r_pu, _ = branch.impedance_pu(case.base, from_bus)
         gap_values = []
         normalized = []
@@ -62,14 +56,10 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
                 math.sqrt(max(current_squared, 0.0))
                 - math.sqrt(max(exact_current_squared, 0.0))
             ) * i_base_a
-            loss_delta_w = abs(
-                case.base.to_kw(r_pu * (current_squared - exact_current_squared))
-            ) * 1e3
+            loss_delta_w = abs(case.base.to_kw(r_pu * (current_squared - exact_current_squared))) * 1e3
             gap_values.append(residual)
             normalized.append(abs(residual) / scale)
-            relative_flow.append(abs(residual) / max(
-                abs(voltage_current), abs(flow_squared), RELATIVE_FLOW_FLOOR_PU2,
-            ))
+            relative_flow.append(abs(residual) / max(abs(voltage_current), abs(flow_squared), RELATIVE_FLOW_FLOOR_PU2))
             current_error.append(current_delta_a)
             loss_error.append(loss_delta_w)
         per_branch[j] = {
@@ -108,12 +98,7 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
     }
 
 
-def attach_results(
-    m,
-    case: Case,
-    status: str,
-    socp_gap_tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE,
-) -> Case:
+def attach_results(m, case: Case, status: str, socp_gap_tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE) -> Case:
     base = case.base
     idx = case.index
     T = list(case.periods)
@@ -133,12 +118,12 @@ def attach_results(
     )
 
     for b, bus in case.buses.items():
-        bus.result = BusResult(
-            v_pu=series([math.sqrt(max(_val(m.v[b, t]), 0.0)) for t in T])
-        )
+        bus.result = BusResult(v_pu=series([math.sqrt(max(_val(m.v[b, t]), 0.0)) for t in T]))
 
-    for j, branch in ((j, case.branches[case.parent_branch[j]])
-                      for j in case.buses if j != case.root):
+    for j in case.buses:
+        if j == case.root:
+            continue
+        branch = case.branches[case.parent_branch[j]]
         r_pu, _ = branch.impedance_pu(base, case.buses[branch.from_bus])
         branch.result = BranchResult(
             p_kw=series([base.to_kw(_val(m.P[j, t])) for t in T]),
@@ -155,9 +140,7 @@ def attach_results(
         ch = series([base.to_kw(_val(m.pch[s.id, t])) for t in T])
         dis = series([base.to_kw(_val(m.pdis[s.id, t])) for t in T])
         soc = series([base.to_kwh(_val(m.soc[s.id, t])) for t in T])
-        inverter_loss = series([
-            base.to_kw(_val(m.pbess_loss[s.id, t])) for t in T
-        ])
+        inverter_loss = series([base.to_kw(_val(m.pbess_loss[s.id, t])) for t in T])
         s.result = BessResult(
             charge_kw=ch,
             discharge_kw=dis,
@@ -170,12 +153,8 @@ def attach_results(
 
     for g in case.pv:
         gen = series([base.to_kw(_val(m.ppv[g.id, t])) for t in T])
-        inverter_loss = series([
-            base.to_kw(_val(m.ppv_loss[g.id, t])) for t in T
-        ])
-        grid_consumption = series([
-            base.to_kw(_val(m.ppv_grid_consumption[g.id, t])) for t in T
-        ])
+        inverter_loss = series([base.to_kw(_val(m.ppv_loss[g.id, t])) for t in T])
+        grid_consumption = series([base.to_kw(_val(m.ppv_grid_consumption[g.id, t])) for t in T])
         solar_loss = inverter_loss - grid_consumption
         g.result = PvResult(
             avail_kw=g.avail_kw.copy(),

@@ -1,4 +1,4 @@
-"""Resolve um OPF com controle ativo de BESS/PV e exporta os resultados."""
+"""Solve the active-power OPF and export device and network results."""
 from __future__ import annotations
 
 import argparse
@@ -12,9 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from opf.active_model import solve_active_power_opf
 from opf.data import load_case
-from opf.export import (
-    write_result_csvs,
-)
+from opf.export import write_result_csvs
 
 
 DEFAULT_CASE_PATH = PROJECT_ROOT / "examples" / "case5"
@@ -32,13 +30,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    solved = solve_active_power_opf(
-        load_case(args.case),
-        solver=args.solver,
-        tie_break_penalty=args.tie_break_penalty,
-    )
+    solved = solve_active_power_opf(load_case(args.case), solver=args.solver, tie_break_penalty=args.tie_break_penalty)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{solved.name}_active_power_opf"
     paths = write_result_csvs(solved, args.output_dir, stem=stem)
 

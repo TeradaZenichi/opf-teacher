@@ -1,11 +1,13 @@
-"""Estruturas de dados do caso e dos resultados."""
+"""Network, device and result objects."""
 import math
 
 import pandas as pd
 
+from opf.states import local_state_action, state_values
+
 
 def phase_count(phases) -> int:
-    """Return the supported electrical phase count, defaulting to balanced 3-phase."""
+    """Default to three phases when phase data is absent."""
     count = len(tuple(phases or ())) or 3
     if count not in {1, 3}:
         raise ValueError(
@@ -21,18 +23,16 @@ def phase_power_factor(phases) -> float:
 
 
 def system_voltage_base_kv(kv_base: float | None, phases, fallback_kv: float) -> float:
-    """Return the system voltage base used by the balanced equivalent."""
     phase_count(phases)
     bus_kv = float(kv_base or 0.0)
     if bus_kv <= 0.0:
         return float(fallback_kv)
-    # OpenDSS Bus.kVBase is line-neutral after CalcVoltageBases, including for
-    # the one-phase proxy of a balanced circuit whose configured base is V_LL.
+    # OpenDSS kVBase is line-neutral, even for our single-phase equivalent.
     return math.sqrt(3.0) * bus_kv
 
 
 class Base:
-    """Bases do sistema e conversões para pu."""
+    """System bases and per-unit conversions."""
 
     def __init__(self, s_base_kva, v_base_kv):
         self.s_base_kva, self.v_base_kv = s_base_kva, v_base_kv
@@ -67,8 +67,7 @@ class GridResult:
 
 
 class BessResult:
-    def __init__(self, charge_kw, discharge_kw, p_net_kw, soc_kwh, soc_frac,
-                 q_kvar=None, inverter_loss_kw=None):
+    def __init__(self, charge_kw, discharge_kw, p_net_kw, soc_kwh, soc_frac, q_kvar=None, inverter_loss_kw=None):
         self.charge_kw, self.discharge_kw, self.p_net_kw = charge_kw, discharge_kw, p_net_kw
         self.q_kvar = q_kvar
         self.inverter_loss_kw = inverter_loss_kw
@@ -87,13 +86,13 @@ class PvResult:
 
 
 class Bus:
-    def __init__(self, id, type, name, v_min_pu, v_max_pu, p_load_kw, q_load_kw,
-                 phases=None, kv_base_ln=None):
+    def __init__(self, id, type, name, v_min_pu, v_max_pu, p_load_kw, q_load_kw, phases=None, kv_base_ln=None):
         self.id, self.type, self.name = id, type, name
         self.v_min_pu, self.v_max_pu = v_min_pu, v_max_pu
         self.p_load_kw, self.q_load_kw = p_load_kw, q_load_kw
         self.phases = tuple(phases or ())
         self.kv_base_ln = kv_base_ln
+        self.state = None
         self.result = None
 
     @property
@@ -125,16 +124,11 @@ class Branch:
         self.result = None
 
     def impedance_pu(self, base, from_bus):
-        """Retorna R e X nas bases do ramo."""
         if self.impedance_base_kva is not None:
             scale = base.s_base_kva / self.impedance_base_kva
             return self.r_pu_on_rating * scale, self.x_pu_on_rating * scale
 
-        voltage_base_kv = system_voltage_base_kv(
-            from_bus.kv_base_ln,
-            self.phases,
-            base.v_base_kv,
-        )
+        voltage_base_kv = system_voltage_base_kv(from_bus.kv_base_ln, self.phases, base.v_base_kv)
         z_base_ohm = voltage_base_kv ** 2 * 1e3 / base.s_base_kva
         return self.r_ohm / z_base_ohm, self.x_ohm / z_base_ohm
 
@@ -144,6 +138,7 @@ class Grid:
         self.bus, self.v_ref_pu = bus, v_ref_pu
         self.p_import_max_kw, self.p_export_max_kw = p_import_max_kw, p_export_max_kw
         self.q_max_kvar, self.feed_in_ratio = q_max_kvar, feed_in_ratio
+        self.state = None
         self.result = None
 
 
@@ -151,17 +146,22 @@ class Bess:
     def __init__(self, id, bus, e_cap_kwh, p_charge_max_kw, p_discharge_max_kw,
                  eta_charge, eta_discharge, soc_init_frac, soc_min_frac, soc_max_frac,
                  cyclic_soc, s_max_kva=None, reactive_control=False,
-                 q_loss_rated_kw=0.0):
+                 q_loss_rated_kw=0.0, soc_terminal_frac=None):
         self.id, self.bus, self.e_cap_kwh = id, bus, e_cap_kwh
         self.p_charge_max_kw, self.p_discharge_max_kw = p_charge_max_kw, p_discharge_max_kw
         self.eta_charge, self.eta_discharge = eta_charge, eta_discharge
         self.soc_init_frac, self.soc_min_frac, self.soc_max_frac = soc_init_frac, soc_min_frac, soc_max_frac
         self.cyclic_soc = cyclic_soc
-        self.s_max_kva = (max(p_charge_max_kw, p_discharge_max_kw)
-                          if s_max_kva is None else s_max_kva)
+        self.soc_terminal_frac = soc_terminal_frac
+        self.s_max_kva = (max(p_charge_max_kw, p_discharge_max_kw) if s_max_kva is None else s_max_kva)
         self.reactive_control = reactive_control
         self.q_loss_rated_kw = q_loss_rated_kw
+        self.state = None
+        self.action = None
         self.result = None
+
+    def state_action(self, bus):
+        return local_state_action(self, bus)
 
 
 class Pv:
@@ -173,7 +173,12 @@ class Pv:
         self.avail_kw = avail_kw
         self.q_loss_rated_kw = q_loss_rated_kw
         self.night_var = night_var
+        self.state = None
+        self.action = None
         self.result = None
+
+    def state_action(self, bus):
+        return local_state_action(self, bus)
 
 
 class Summary:
@@ -211,8 +216,7 @@ class Summary:
 
 
 class Case:
-    def __init__(self, name, base, buses, branches, grid, bess, pv,
-                 timestamps, dt_h, price):
+    def __init__(self, name, base, buses, branches, grid, bess, pv, timestamps, dt_h, price):
         self.name, self.base = name, base
         self.buses, self.branches, self.grid = buses, branches, grid
         self.bess, self.pv = bess, pv
@@ -229,3 +233,23 @@ class Case:
     def root(self): return self.grid.bus
     @property
     def index(self): return pd.DatetimeIndex(self.timestamps)
+
+    def state_action(self):
+        """Return central X/Y for the first interval, keyed by bus and device ID."""
+        if self.summary is None:
+            raise ValueError("No teacher solution; solve the observed case first")
+        x = {
+            "timestamp": self.index[0].isoformat(),
+            "dt_h": self.dt_h,
+            "buses": {bid: state_values(bus.state) for bid, bus in sorted(self.buses.items())},
+            "grid": state_values(self.grid.state),
+            "bess": {},
+            "pv": {},
+        }
+        y = {"bess": {}, "pv": {}}
+        for kind in ("bess", "pv"):
+            for device in sorted(getattr(self, kind), key=lambda d: d.id):
+                local_x, action = device.state_action(self.buses[device.bus])
+                x[kind][device.id] = local_x["device"]
+                y[kind][device.id] = action
+        return x, y

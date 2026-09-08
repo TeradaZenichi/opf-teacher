@@ -1,4 +1,4 @@
-"""Controles locais Volt-VAr e Volt-Watt."""
+"""Local Volt-VAr and Volt-Watt controls."""
 import pyomo.environ as pyo
 
 VV_V = (0.90, 0.92, 0.98, 1.02, 1.08, 1.15)
@@ -46,12 +46,10 @@ def add(m, pv, pv_ctrl, pv_s, pv_avail, T):
         setattr(m, f"{name}_idx", S)
         setattr(m, f"{name}_k", KS)
         setattr(m, f"{name}_lam", lam)
-        setattr(m, f"{name}_sum", pyo.Constraint(
-            S, rule=lambda m, g, t: sum(lam[g, t, k] for k in K) == 1))
+        setattr(m, f"{name}_sum", pyo.Constraint(S, rule=lambda m, g, t: sum(lam[g, t, k] for k in K) == 1))
         setattr(m, f"{name}_x", pyo.Constraint(
             S, rule=lambda m, g, t: m.vloc[g, t] == sum(lam[g, t, k] * xk[k] for k in K)))
-        setattr(m, f"{name}_sos", pyo.SOSConstraint(
-            S, rule=lambda m, g, t: [lam[g, t, k] for k in K], sos=2))
+        setattr(m, f"{name}_sos", pyo.SOSConstraint(S, rule=lambda m, g, t: [lam[g, t, k] for k in K], sos=2))
         return S, lam, K
 
     if var_ids:

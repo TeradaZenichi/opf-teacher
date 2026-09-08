@@ -1,4 +1,4 @@
-"""Importação da rede OpenDSS para o modelo equilibrado."""
+"""Import OpenDSS networks for the balanced OPF model."""
 from __future__ import annotations
 
 from collections import deque
@@ -56,7 +56,7 @@ def load_opendss_network(
     fallback_v_base_kv: float | None = None,
     dss: Any | None = None,
 ) -> OpenDSSNetworkData:
-    """Compila o Master.dss e retorna a topologia radial."""
+    """Compile Master.dss and read its radial topology."""
     master = Path(master_path).expanduser().resolve()
     if not master.is_file():
         raise FileNotFoundError(f"OpenDSS master file not found: {master}")
@@ -70,7 +70,7 @@ def load_opendss_network(
         dss_interface = getattr(dss, "dssinterface", None)
         if dss_interface is not None and int(getattr(dss_interface, "num_circuits", 1)) == 0:
             raise RuntimeError(f"OpenDSS did not create a circuit while compiling {master}")
-        # Alguns arquivos não executam CalcVoltageBases no final.
+        # Master files may omit CalcVoltageBases.
         dss.text("calcvoltagebases")
         _raise_dss_error(dss, master)
     finally:
@@ -86,12 +86,7 @@ def load_opendss_network(
     buses = tuple(_read_bus(dss, name, name_to_id[name]) for name in names)
     bus_by_id = {bus.id: bus for bus in buses}
 
-    lines = _read_lines(
-        dss,
-        name_to_id,
-        bus_by_id,
-        fallback_v_base_kv=fallback_v_base_kv,
-    )
+    lines = _read_lines(dss, name_to_id, bus_by_id, fallback_v_base_kv=fallback_v_base_kv)
     transformers = _read_transformers(dss, name_to_id)
     raw_branches = lines + transformers
     if not raw_branches:
@@ -99,16 +94,10 @@ def load_opendss_network(
 
     root = _resolve_root(slack_bus, name_to_id, raw_branches)
     branches = _orient_radial(tuple(bus_by_id), raw_branches, root)
-    return OpenDSSNetworkData(
-        buses=buses,
-        branches=branches,
-        root_bus=root,
-        bus_name_to_id=name_to_id,
-    )
+    return OpenDSSNetworkData(buses=buses, branches=branches, root_bus=root, bus_name_to_id=name_to_id)
 
 
 def resolve_bus_id(value: str | int, bus_name_to_id: Mapping[str, int]) -> int:
-    """Resolve nome ou identificador numérico de uma barra."""
     if isinstance(value, bool):
         raise ValueError(f"Invalid bus reference: {value!r}")
     if isinstance(value, int):
@@ -132,12 +121,12 @@ def _new_dss():
             "OpenDSS input requires 'opendssdirect.py'. "
             "Install the project dependencies with: pip install -r requirements.txt"
         ) from exc
-    # Mantém o circuito ativo isolado de outras instâncias no mesmo processo.
+    # Each import gets an isolated circuit context.
     return _OpenDSSDirectAdapter(opendssdirect.NewContext())
 
 
 class _OpenDSSDirectAdapter:
-    """Interface mínima usada pelo importador."""
+    """OpenDSSDirect interface used by the importer."""
 
     def __init__(self, dss):
         self.text = lambda command: dss.Text.Command(command)
@@ -290,13 +279,10 @@ def _raise_dss_error(dss, master: Path) -> None:
 
 
 def _bus_name(value: str) -> str:
-    """Normaliza o nome e remove os nós do terminal."""
     return str(value).strip().split(".", 1)[0].casefold()
 
 
-def _assign_bus_ids(
-    names: list[str], explicit: Mapping[str, int] | None
-) -> dict[str, int]:
+def _assign_bus_ids(names: list[str], explicit: Mapping[str, int] | None) -> dict[str, int]:
     result: dict[str, int] = {}
     used: set[int] = set()
     for raw_name, raw_id in (explicit or {}).items():
@@ -406,10 +392,7 @@ def _read_lines(
     return tuple(rows)
 
 
-def _read_transformers(
-    dss,
-    name_to_id: Mapping[str, int],
-) -> tuple[OpenDSSBranchData, ...]:
+def _read_transformers(dss, name_to_id: Mapping[str, int]) -> tuple[OpenDSSBranchData, ...]:
     interface = getattr(dss, "transformers", None)
     names = tuple(getattr(interface, "names", ()) or ()) if interface else ()
     rows: list[OpenDSSBranchData] = []
@@ -449,11 +432,8 @@ def _read_transformers(
         if min(w1["kv"], w2["kv"], w1["kva"], w2["kva"], w1["tap"], w2["tap"]) <= 0.0:
             raise ValueError(f"Transformer {name!r} has non-positive kV, kVA or tap data")
 
-        # %R usa a base de cada enrolamento; XHL usa a base do enrolamento 1.
-        r_pu = (
-            w1["r_percent"] / 100.0
-            + w2["r_percent"] / 100.0 * w1["kva"] / w2["kva"]
-        )
+        # %R uses each winding's base; XHL uses winding 1's base.
+        r_pu = (w1["r_percent"] / 100.0 + w2["r_percent"] / 100.0 * w1["kva"] / w2["kva"])
         x_pu = float(interface.xhl_percent) / 100.0
         z_base_w1 = w1["kv"] ** 2 * 1e3 / w1["kva"]
         s_max_kva = min(w1["kva"], w2["kva"])
@@ -555,16 +535,8 @@ def _orient_radial(
                 continue
             visited.add(child)
             queue.append(child)
-            tap_ratio = (
-                1.0 / branch.tap_ratio if branch.from_bus != parent
-                else branch.tap_ratio
-            )
-            oriented.append(replace(
-                branch,
-                from_bus=parent,
-                to_bus=child,
-                tap_ratio=tap_ratio,
-            ))
+            tap_ratio = (1.0 / branch.tap_ratio if branch.from_bus != parent else branch.tap_ratio)
+            oriented.append(replace(branch, from_bus=parent, to_bus=child, tap_ratio=tap_ratio))
 
     missing = set(bus_ids) - visited
     if missing:
