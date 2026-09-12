@@ -1,0 +1,45 @@
+{
+  "bess": [
+    {
+      "id": "b1",
+      "bus": "bus_004",
+      "phases": ["a", "b", "c"],
+      "connection": "wye",
+      "dispatch_mode": "aggregate",
+      "e_cap_kwh": 100.0,
+      "p_charge_max_kw": 40.0,
+      "p_discharge_max_kw": 40.0,
+      "s_max_kva": 50.0,
+      "reactive_control": false,
+      "q_loss_rated_kw": 0.0,
+      "eta_charge": 0.95,
+      "eta_discharge": 0.95,
+      "soc_init_frac": 0.5,
+      "soc_min_frac": 0.10,
+      "soc_max_frac": 1.0,
+      "cyclic_soc": true
+    }
+  ],
+  "pv": [
+    {
+      "id": "pv1",
+      "bus": "bus_005",
+      "phases": ["a", "b", "c"],
+      "connection": "wye",
+      "dispatch_mode": "aggregate",
+      "p_max_kw": 260.0,
+      "s_max_kva": 300.0,
+      "q_loss_rated_kw": 0.0,
+      "night_var": false,
+      "profile": "pv.csv:PV5",
+      "phase_profiles": {
+        "a": "pv.csv:PV5_a",
+        "b": "pv.csv:PV5_b",
+        "c": "pv.csv:PV5_c"
+      },
+      "control": "fixed_pf",
+      "curtailable": false,
+      "power_factor": 1.0
+    }
+  ]
+}

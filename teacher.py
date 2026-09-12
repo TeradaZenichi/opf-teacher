@@ -8,24 +8,60 @@ from pathlib import Path
 
 import pyomo.environ as pyo
 
-from opf.active_model import build_active_power_model, _attach_active_results
+from opf.formulations import Formulation, resolve_formulation
+from opf.single_phase.active_model import build_active_power_model, _attach_active_results
 from opf.components import Case
 from opf.data import load_case
-from opf.model import build_model
-from opf.results import DEFAULT_SOCP_GAP_TOLERANCE, attach_results
+from opf.single_phase.distflow_socp import build_model as build_single_phase_socp_model
+from opf.single_phase.results import DEFAULT_SOCP_GAP_TOLERANCE, attach_results
 from opf.states import (BessAction, BessState, BusState, GridState, PvAction, PvState)
+from opf.three_phase.components import Case as ThreePhaseCase
+from opf.three_phase.data import load_case as load_three_phase_case
+from opf.three_phase.ivr_model import build_model as build_three_phase_ivr_model
+from opf.three_phase.states import (
+    BessAction as ThreePhaseBessAction,
+    PvAction as ThreePhasePvAction,
+)
+
+
+_BUILDERS = {
+    Formulation.SINGLE_PHASE_ACTIVE: build_active_power_model,
+    Formulation.SINGLE_PHASE_SOCP: build_single_phase_socp_model,
+    Formulation.THREE_PHASE_IVR: build_three_phase_ivr_model,
+}
+
+_DEFAULT_SOLVERS = {
+    Formulation.SINGLE_PHASE_ACTIVE: "appsi_highs",
+    Formulation.SINGLE_PHASE_SOCP: "gurobi_direct",
+    Formulation.THREE_PHASE_IVR: "scipy_slsqp",
+}
 
 
 class Teacher:
-    def __init__(self, source: str | Path | Case, active_power_only: bool = False):
-        self.case: Case = source if isinstance(source, Case) else load_case(source)
-        self.model: pyo.ConcreteModel | None = None
-        self.active_power_only = active_power_only
+    def __init__(
+        self,
+        source: str | Path | Case | ThreePhaseCase,
+        active_power_only: bool = False,
+        formulation: str | Formulation | None = None,
+    ):
+        self.formulation = resolve_formulation(
+            formulation,
+            active_power_only=active_power_only,
+        )
+        if isinstance(source, (Case, ThreePhaseCase)):
+            self.case: Case | ThreePhaseCase = source
+        elif self.formulation is Formulation.THREE_PHASE_IVR:
+            self.case = load_three_phase_case(source)
+        else:
+            self.case = load_case(source)
+        self.model: object | None = None
+        # Kept for callers that still inspect the legacy flag.
+        self.active_power_only = self.formulation is Formulation.SINGLE_PHASE_ACTIVE
 
     def build(self) -> "Teacher":
         self._clear_results()
         self.model = None
-        builder = build_active_power_model if self.active_power_only else build_model
+        builder = _BUILDERS[self.formulation]
         self.model = builder(self.case)
         return self
 
@@ -66,7 +102,34 @@ class Teacher:
         if self.model is None:
             self.build()
         self._clear_results()
-        solver = solver or ("appsi_highs" if self.active_power_only else "gurobi_direct")
+        solver = solver or _DEFAULT_SOLVERS[self.formulation]
+        if self.formulation is Formulation.THREE_PHASE_IVR:
+            if solver not in {"scipy_slsqp", "slsqp"}:
+                raise ValueError("three_phase_ivr currently requires solver='scipy_slsqp'")
+            solved = self.model.solve(tee=tee, **options)
+            for device in solved.bess:
+                device.action = ThreePhaseBessAction(
+                    p_net_kw={
+                        phase: float(values.iloc[0])
+                        for phase, values in device.result.p_net_kw.items()
+                    },
+                    q_injection_kvar={
+                        phase: float(values.iloc[0])
+                        for phase, values in device.result.q_injection_kvar.items()
+                    },
+                )
+            for device in solved.pv:
+                device.action = ThreePhasePvAction(
+                    generation_kw={
+                        phase: float(values.iloc[0])
+                        for phase, values in device.result.generation_kw.items()
+                    },
+                    q_injection_kvar={
+                        phase: float(values.iloc[0])
+                        for phase, values in device.result.q_injection_kvar.items()
+                    },
+                )
+            return solved
         optimizer = pyo.SolverFactory(solver)
         if optimizer is None or not optimizer.available(exception_flag=False):
             raise RuntimeError(f"Solver '{solver}' unavailable")
@@ -76,9 +139,9 @@ class Teacher:
         status = str(result.solver.termination_condition)
         if status.lower() not in {"optimal", "locallyoptimal"}:
             raise RuntimeError(f"Teacher did not solve to optimality: {status}")
-        if self.active_power_only:
+        if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
             _attach_active_results(self.model, self.case, status)
-        else:
+        elif self.formulation is Formulation.SINGLE_PHASE_SOCP:
             attach_results(self.model, self.case, status, socp_gap_tolerance=socp_gap_tolerance)
         for device in self.case.bess:
             device.action = BessAction(float(device.result.p_net_kw.iloc[0]), float(device.result.q_kvar.iloc[0]))

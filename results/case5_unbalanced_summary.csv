@@ -1,0 +1,2 @@
+formulation,status,objective_cost,energy_cost,energy_import_kwh,energy_export_kwh,pv_generated_kwh,pv_curtailed_kwh,losses_kwh,v_min_pu,v_max_pu,socp_tightness,socp_relaxation_tight,inverter_losses_kwh,optimizer,iterations,max_power_flow_residual_a,solution_quality
+three_phase_ac_ivr_reduced_space,locally_optimal,6168.864614005217,6168.864610021299,10222.000438131963,0.0,1770.0,0.0,92.18351209332378,0.9704846225745091,1.0,not_applicable,False,0.0,scipy_slsqp,13,1.700736023446068e-10,local_feasible

@@ -4,3 +4,4 @@ matplotlib==3.11.0
 OpenDSSDirect.py==0.9.4
 gurobipy==13.0.2
 highspy==1.15.1
+scipy==1.18.1

@@ -44,6 +44,16 @@ Run:
 With `ACTIVE_POWER_ONLY = True`, `main.py` also writes the devices, buses,
 branches, and summary CSVs under `results/`.
 
+The demand-unbalanced three-phase example uses the phase-native AC-IVR solver:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_three_phase_opf.py
+```
+
+It writes `case5_unbalanced_{devices,buses,branches,summary}.csv` under
+`results/`. This solver uses SciPy SLSQP and reports a physically feasible local
+solution, without a global-optimality certificate.
+
 ## Active-power CSV export
 
 An active-power-only LinDistFlow variant is available for producing a simple
@@ -135,6 +145,8 @@ Supported network elements:
 - radial topology;
 - single-phase equivalent or balanced three-phase lines using `R1`, `X1`,
   `Length`, and `NormAmps`;
+- phase-native radial lines using full `Rmatrix` and `Xmatrix`, including mutual
+  coupling;
 - three-phase, two-winding transformers;
 - transformer `kV`, `kVA`, `%R`, `XHL`, connection, and fixed tap;
 - multiple voltage levels.
@@ -145,10 +157,11 @@ Not yet supported:
 - single-phase transformer banks;
 - transformers with three or more windings;
 - automatic `RegControl` actions;
-- unbalanced three-phase OPF.
+- transformers, delta devices, and explicit neutrals in the phase-native model.
 
-Line `Rmatrix`, `Xmatrix`, and phase data are retained in the network objects
-for the future unbalanced formulation.
+The initial phase-native formulation supports grounded-wye-equivalent cases
+whose neutral has already been Kron-reduced into the line matrices. Imbalance
+is specified explicitly in phase demand columns.
 
 ## Python API
 
@@ -172,6 +185,27 @@ print(case.grid.result.import_kw)
 print(case.buses[4].result.v_pu)
 ```
 
+The formulation can also be selected explicitly without changing the legacy
+`active_power_only` API:
+
+```python
+from teacher import Teacher
+
+active = Teacher("examples/case5", formulation="single_phase_active")
+full = Teacher("examples/case5", formulation="single_phase_socp")
+unbalanced = Teacher(
+    "examples/case5_unbalanced",
+    formulation="three_phase_ivr",
+).solve()
+```
+
+The existing models are single-phase equivalents for balanced systems and live
+under `opf/single_phase/`. Phase-native buses, branches, device connections,
+states, actions, and results are available under `opf/three_phase/`; see the
+[three-phase contract](docs/three-phase-contract.md). The phase-native loader
+requires `P<bus>_<phase>` and `Q<bus>_<phase>` demand columns and the AC-IVR
+solver retains the full line impedance matrices.
+
 The BESS sign convention is `p_net_kw > 0` for charging and `p_net_kw < 0`
 for discharging. Reactive power uses `q_kvar > 0` for injection and
 `q_kvar < 0` for absorption.
@@ -188,8 +222,13 @@ Run `python example.py` to compare two independent five-bus scenarios:
 
 Both use the reference topology, demand and prices. The example uses HiGHS
 with active power only and illustrative pre-action voltages of 1 pu.
-Each pair labels only the first interval, and each teacher solves its full
-network even when the student's observation is local.
+The example advances through `STEPS` horizons and builds separate temporal
+windows of size `WINDOW` for central and local control. Each label is the first
+action of that horizon. Observations represent an illustrative idle history:
+SoC stays constant and previous commands are zero. Teacher actions are labels
+only, not applied commands. In an actual rollout, replace these observations
+with environment measurements. Each teacher solves its full network even when
+the student's observation is local.
 
 `Teacher` uses the existing `Case`, `Bus`, `Bess`, `Pv`, and `Grid` objects.
 `BessOpt` remains available with the same build/solve usage. Components now
@@ -383,13 +422,14 @@ controls are `optimal`, `volt-var`, and `volt-var-watt`.
 
 ```text
 opf/
-├── components.py   domain and result objects
-├── data.py         case loader
-├── opendss.py      OpenDSS interface
-├── model.py        Pyomo formulation
-├── pv_droop.py     Volt-VAr and Volt-Watt controls
-├── pv_optimal.py   optimal and fixed_pf controls
-└── results.py      result conversion and gap analysis
+├── single_phase/   existing balanced-equivalent formulations and exports
+├── three_phase/    unbalanced AC-IVR formulation, loader, and exports
+├── components.py   shared domain and result objects
+├── data.py         shared case loader
+├── formulations.py formulation names and compatibility rules
+├── opendss.py      shared OpenDSS interface
+├── model.py        compatibility import for single_phase/distflow_socp.py
+└── active_model.py compatibility import for single_phase/active_model.py
 teacher.py          BessOpt interface
 main.py             configured example runner
 ```
