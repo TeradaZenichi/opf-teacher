@@ -111,6 +111,30 @@ examples/case5/
 | `price.csv` | energy price by period |
 | `pv.csv` | available PV power |
 
+Every public loader accepts either the case directory or the configuration
+file itself. This allows an external repository to own one case and pass the
+same source to the teacher and OpenDSS environment:
+
+```python
+case_source = "scenarios/network_01/config.json"  # directory also accepted
+teacher = Teacher(case_source)  # formulation may be read from config.json
+```
+
+Paths are resolved relative to the configuration file. The optional `files`
+section can override the default data filenames:
+
+```json
+"schema_version": 1,
+"files": {
+  "demand": "demand.csv",
+  "prices": "price.csv",
+  "devices": "devices.json"
+}
+```
+
+Without this section, the conventional filenames are used. The examples under
+`examples/` follow the same contract and remain self-contained.
+
 Input units are kW, kVAr, kWh, ohm, and kV. Conversion to per unit is performed
 when the Pyomo model is built.
 
@@ -198,6 +222,25 @@ unbalanced = Teacher(
     formulation="three_phase_ivr",
 ).solve()
 ```
+
+For phase-native observations, use the explicit teacher boundary:
+
+```python
+from teacher import ThreePhaseTeacher
+from opf.three_phase import BusState, BessState, PvState
+
+teacher = ThreePhaseTeacher("examples/case5_unbalanced")
+solved = teacher.observe(
+    buses=bus_states,
+    bess=bess_states,
+    pv=pv_states,
+).solve()
+x, y = solved.state_action()
+```
+
+Three-phase bus, BESS, PV, and action values are dictionaries indexed by
+`a`, `b`, and `c`. The temporal-window behavior is the same as for the
+single-phase teacher.
 
 The existing models are single-phase equivalents for balanced systems and live
 under `opf/single_phase/`. Phase-native buses, branches, device connections,

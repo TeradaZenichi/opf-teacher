@@ -1,6 +1,7 @@
 """Pre-action observations and commands for phase-native teachers."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -79,6 +80,16 @@ class PvState:
 
 
 @dataclass
+class GridState:
+    buy_price_per_kwh: float
+    sell_price_per_kwh: float
+
+    def __post_init__(self):
+        self.buy_price_per_kwh = float(self.buy_price_per_kwh)
+        self.sell_price_per_kwh = float(self.sell_price_per_kwh)
+
+
+@dataclass
 class BessAction:
     p_net_kw: Mapping[str | int, float]
     q_injection_kvar: Mapping[str | int, float]
@@ -120,3 +131,18 @@ class PvAction:
     @property
     def q_injection_total_kvar(self):
         return sum(self.q_injection_kvar.values())
+
+
+def state_values(state):
+    if state is None:
+        raise ValueError("Missing pre-action observation; call Teacher.observe first")
+    return deepcopy(vars(state))
+
+
+def local_state_action(device, bus):
+    if bus.id != device.connection.bus:
+        raise ValueError(f"Device {device.id!r} is not connected to bus {bus.id!r}")
+    if device.action is None:
+        raise ValueError("No teacher action; solve the observed case first")
+    x = {"bus": state_values(bus.state), "device": state_values(device.state)}
+    return x, state_values(device.action)

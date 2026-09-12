@@ -8,12 +8,18 @@ from pathlib import Path
 import pandas as pd
 
 from opf.components import Base, Bess, Branch, Bus, Case, Grid, Pv
+from opf.case_source import resolve_case_source, validate_case_config
 from opf.opendss import load_opendss_network, resolve_bus_id
 
 
 def load_case(path: str | Path) -> Case:
-    path = Path(path).expanduser().resolve()
-    cfg = _read_json(path / "config.json")
+    path, config_path = resolve_case_source(path)
+    cfg = _read_json(config_path)
+    validate_case_config(cfg)
+    files = cfg.get("files", {})
+    demand_path = path / files.get("demand", "demand.csv")
+    price_path = path / files.get("prices", "price.csv")
+    devices_path = path / files.get("devices", "devices.json")
 
     base = Base(float(cfg["base"]["s_base_kva"]), float(cfg["base"]["v_base_kv"]))
     vlim = cfg.get("voltage_limits", {})
@@ -36,7 +42,7 @@ def load_case(path: str | Path) -> Case:
     def case_bus(value) -> int:
         return resolve_bus_id(value, bus_name_to_id)
 
-    dem = (pd.read_csv(path / "demand.csv", parse_dates=["timestamp"]) .sort_values("timestamp").reset_index(drop=True))
+    dem = (pd.read_csv(demand_path, parse_dates=["timestamp"]) .sort_values("timestamp").reset_index(drop=True))
     idx = pd.DatetimeIndex(dem["timestamp"])
     p_load, q_load = {}, {}
     for col in dem.columns:
@@ -104,10 +110,11 @@ def load_case(path: str | Path) -> Case:
         feed_in_ratio=float(g.get("feed_in_tariff_ratio", 1.0)),
     )
 
-    price_df = (pd.read_csv(path / "price.csv", parse_dates=["timestamp"]) .sort_values("timestamp"))
+    price_df = (pd.read_csv(price_path, parse_dates=["timestamp"]) .sort_values("timestamp"))
+    _require_index(price_df, idx, str(price_path.name))
     price = pd.Series(price_df["price_per_kwh"].to_numpy(), index=idx)
 
-    dev = _read_json(path / "devices.json") if (path / "devices.json").exists() else {}
+    dev = _read_json(devices_path) if devices_path.exists() else {}
 
     bess = [
         Bess(
@@ -157,6 +164,8 @@ def load_case(path: str | Path) -> Case:
         price=price,
     )
     case.bus_name_to_id = dict(bus_name_to_id)
+    case.source_root = path
+    case.config_path = config_path
     _build_topology(case)
     _validate(case)
     return case
@@ -170,14 +179,27 @@ def _read_json(p: Path) -> dict:
 def _infer_dt_hours(idx: pd.DatetimeIndex) -> float:
     if len(idx) < 2:
         return 1.0
-    return float(idx.to_series().diff().dropna().median().total_seconds()) / 3600.0
+    differences = idx.to_series().diff().dropna().dt.total_seconds() / 3600.0
+    if (differences <= 0.0).any() or not all(
+        math.isclose(value, differences.iloc[0], rel_tol=0.0, abs_tol=1e-12)
+        for value in differences
+    ):
+        raise ValueError("demand timestamps must be increasing and equally spaced")
+    return float(differences.iloc[0])
 
 
 def _load_profile(path: Path, ref: str, idx: pd.DatetimeIndex) -> pd.Series:
     """Read a profile referenced as file.csv:column."""
     fname, _, col = ref.partition(":")
     df = (pd.read_csv(path / fname, parse_dates=["timestamp"]) .sort_values("timestamp"))
+    _require_index(df, idx, ref)
     return pd.Series(df[col].to_numpy(), index=idx)
+
+
+def _require_index(frame: pd.DataFrame, expected: pd.DatetimeIndex, label: str):
+    actual = pd.DatetimeIndex(frame["timestamp"])
+    if not actual.equals(expected):
+        raise ValueError(f"{label} timestamps must exactly match demand timestamps")
 
 
 def _build_topology(case: Case) -> None:

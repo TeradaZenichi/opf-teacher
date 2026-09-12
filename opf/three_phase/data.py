@@ -9,6 +9,7 @@ import re
 import pandas as pd
 
 from opf.components import Base, Bess, Pv
+from opf.case_source import resolve_case_source, validate_case_config
 from opf.data import _infer_dt_hours
 from opf.opendss import load_opendss_network, resolve_bus_id
 from opf.three_phase.components import (
@@ -27,8 +28,13 @@ _DEMAND_COLUMN = re.compile(r"^(P|Q)(.+)_([abcABC123])$")
 
 
 def load_case(path: str | Path) -> Case:
-    path = Path(path).expanduser().resolve()
-    cfg = _read_json(path / "config.json")
+    path, config_path = resolve_case_source(path)
+    cfg = _read_json(config_path)
+    validate_case_config(cfg)
+    files = cfg.get("files", {})
+    demand_path = path / files.get("demand", "demand.csv")
+    price_path = path / files.get("prices", "price.csv")
+    devices_path = path / files.get("devices", "devices.json")
     configured = str(cfg.get("formulation", "three_phase_ivr")).strip().lower()
     if configured not in {"three_phase_ivr", "unbalanced_ac_ivr"}:
         raise ValueError("A three-phase case must declare formulation='three_phase_ivr'")
@@ -49,7 +55,7 @@ def load_case(path: str | Path) -> Case:
     def case_bus(value) -> int:
         return resolve_bus_id(value, bus_name_to_id)
 
-    demand = pd.read_csv(path / "demand.csv", parse_dates=["timestamp"])
+    demand = pd.read_csv(demand_path, parse_dates=["timestamp"])
     demand = demand.sort_values("timestamp").reset_index(drop=True)
     index = pd.DatetimeIndex(demand["timestamp"])
     phase_loads = _read_phase_demand(demand, index, case_bus)
@@ -111,8 +117,8 @@ def load_case(path: str | Path) -> Case:
             connections=source.connections,
         ))
 
-    price_frame = _read_timed_csv(path / "price.csv")
-    _require_index(price_frame, index, "price.csv")
+    price_frame = _read_timed_csv(price_path)
+    _require_index(price_frame, index, str(price_path.name))
     price = pd.Series(price_frame["price_per_kwh"].to_numpy(), index=index, dtype=float)
 
     grid_cfg = cfg["grid"]
@@ -132,11 +138,11 @@ def load_case(path: str | Path) -> Case:
         feed_in_ratio=float(grid_cfg.get("feed_in_tariff_ratio", 1.0)),
     )
 
-    device_cfg = _read_json(path / "devices.json") if (path / "devices.json").exists() else {}
+    device_cfg = _read_json(devices_path) if devices_path.exists() else {}
     bess = [_load_bess(item, case_bus) for item in device_cfg.get("bess", [])]
     pv = [_load_pv(item, path, index, case_bus) for item in device_cfg.get("pv", [])]
 
-    return Case(
+    case = Case(
         name=cfg.get("name", path.name),
         base=base,
         buses=buses,
@@ -148,6 +154,9 @@ def load_case(path: str | Path) -> Case:
         dt_h=_infer_dt_hours(index),
         price=price,
     )
+    case.source_root = path
+    case.config_path = config_path
+    return case
 
 
 def _read_phase_demand(frame, index, case_bus):

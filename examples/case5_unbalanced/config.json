@@ -1,7 +1,13 @@
 {
+  "schema_version": 1,
   "name": "case5_unbalanced",
   "description": "Five-bus three-phase feeder with imbalance caused only by phase demand",
   "formulation": "three_phase_ivr",
+  "files": {
+    "demand": "demand.csv",
+    "prices": "price.csv",
+    "devices": "devices.json"
+  },
   "base": {
     "s_base_kva": 1000.0,
     "v_base_kv": 11.0

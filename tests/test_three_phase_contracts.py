@@ -14,7 +14,7 @@ from opf.three_phase import (
     Grid,
     normalize_phase,
 )
-from teacher import Teacher
+from teacher import Teacher, ThreePhaseTeacher
 
 
 class ThreePhaseContractTest(unittest.TestCase):
@@ -98,6 +98,33 @@ class ThreePhaseContractTest(unittest.TestCase):
         self.assertEqual(solved.summary.status, "locally_optimal")
         self.assertLess(solved.quality["max_power_flow_residual_a"], 1e-6)
         self.assertLess(solved.buses[2].result.v_pu["c"].iloc[0], 1.0)
+
+    def test_three_phase_teacher_uses_phase_native_pre_action_observation(self):
+        case = self.valid_case()
+        teacher = ThreePhaseTeacher(case)
+        buses = {
+            bus_id: BusState(
+                v_before_pu={phase: 1.0 for phase in bus.phases},
+                angle_before_deg={"a": 0.0, "b": -120.0, "c": 120.0},
+                p_load_kw={
+                    phase: float(bus.p_load_kw[phase].iloc[0])
+                    for phase in bus.phases
+                },
+                q_load_kvar={
+                    phase: float(bus.q_load_kvar[phase].iloc[0])
+                    for phase in bus.phases
+                },
+            )
+            for bus_id, bus in case.buses.items()
+        }
+
+        solved = teacher.observe(buses=buses, bess={}, pv={}).solve()
+        x, y = solved.state_action()
+
+        self.assertEqual(x["timestamp"], self.index[0].isoformat())
+        self.assertEqual(x["phase_order"], ["a", "b", "c"])
+        self.assertEqual(x["buses"][2]["p_load_kw"]["c"], 3.0)
+        self.assertEqual(y, {"bess": {}, "pv": {}})
 
     def test_three_phase_solver_enforces_grid_limits(self):
         case = self.valid_case()

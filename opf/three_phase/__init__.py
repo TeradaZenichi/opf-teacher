@@ -30,6 +30,7 @@ from opf.three_phase.states import (
     BessAction,
     BessState,
     BusState,
+    GridState,
     PvAction,
     PvState,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "BusState",
     "BessState",
     "PvState",
+    "GridState",
     "BessAction",
     "PvAction",
     "BusResult",

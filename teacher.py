@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections import deque
+import json
 import math
 from pathlib import Path
 
 import pyomo.environ as pyo
 
 from opf.formulations import Formulation, resolve_formulation
+from opf.case_source import resolve_case_source
 from opf.single_phase.active_model import build_active_power_model, _attach_active_results
 from opf.components import Case
 from opf.data import load_case
@@ -20,7 +22,11 @@ from opf.three_phase.data import load_case as load_three_phase_case
 from opf.three_phase.ivr_model import build_model as build_three_phase_ivr_model
 from opf.three_phase.states import (
     BessAction as ThreePhaseBessAction,
+    BessState as ThreePhaseBessState,
+    BusState as ThreePhaseBusState,
+    GridState as ThreePhaseGridState,
     PvAction as ThreePhasePvAction,
+    PvState as ThreePhasePvState,
 )
 
 
@@ -44,8 +50,17 @@ class Teacher:
         active_power_only: bool = False,
         formulation: str | Formulation | None = None,
     ):
+        selected_formulation = formulation
+        if (
+            selected_formulation is None
+            and not active_power_only
+            and not isinstance(source, (Case, ThreePhaseCase))
+        ):
+            _, config_path = resolve_case_source(source)
+            with open(config_path, encoding="utf-8") as stream:
+                selected_formulation = json.load(stream).get("formulation")
         self.formulation = resolve_formulation(
-            formulation,
+            selected_formulation,
             active_power_only=active_power_only,
         )
         if isinstance(source, (Case, ThreePhaseCase)):
@@ -71,6 +86,9 @@ class Teacher:
         Voltage is a pre-action feature, not an OPF constraint. Supply a new
         Case to advance the horizon.
         """
+        if self.formulation is Formulation.THREE_PHASE_IVR:
+            return self._observe_three_phase(buses=buses, bess=bess, pv=pv)
+
         case = self.case
         self._validate_observations(buses, bess, pv)
         price = float(case.price.iloc[0])
@@ -92,6 +110,39 @@ class Teacher:
             device.avail_kw = device.avail_kw.astype(float)
             device.avail_kw.iloc[0] = device.state.available_kw
         case.grid.state = GridState(price, price * case.grid.feed_in_ratio)
+        self.model = None
+        self._clear_results()
+        return self
+
+    def _observe_three_phase(self, *, buses, bess, pv):
+        case = self.case
+        self._validate_three_phase_observations(buses, bess, pv)
+        price = float(case.price.iloc[0])
+
+        for bus_id, bus in case.buses.items():
+            bus.state = deepcopy(buses[bus_id])
+            for phase in bus.phases:
+                bus.p_load_kw[phase].iloc[0] = bus.state.p_load_kw[phase]
+                bus.q_load_kvar[phase].iloc[0] = bus.state.q_load_kvar[phase]
+        for connected in case.bess:
+            connected.state = deepcopy(bess[connected.id])
+            device = connected.device
+            if device.cyclic_soc and device.soc_terminal_frac is None:
+                device.soc_terminal_frac = device.soc_init_frac
+            device.soc_init_frac = connected.state.soc_before_frac
+        for connected in case.pv:
+            connected.state = deepcopy(pv[connected.id])
+            for phase in connected.connection.phases:
+                connected.available_kw[phase].iloc[0] = (
+                    connected.state.available_kw[phase]
+                )
+            connected.device.avail_kw.iloc[0] = sum(
+                connected.state.available_kw.values()
+            )
+        case.grid.state = ThreePhaseGridState(
+            price,
+            price * case.grid.feed_in_ratio,
+        )
         self.model = None
         self._clear_results()
         return self
@@ -188,6 +239,34 @@ class Teacher:
         if any(state.available_kw < 0 for state in pv.values()):
             raise ValueError("Observed PV availability cannot be negative")
 
+    def _validate_three_phase_observations(self, buses, bess, pv):
+        case = self.case
+        groups = (
+            ("buses", buses, set(case.buses), ThreePhaseBusState),
+            ("bess", bess, {device.id for device in case.bess}, ThreePhaseBessState),
+            ("pv", pv, {device.id for device in case.pv}, ThreePhasePvState),
+        )
+        for label, observations, ids, state_type in groups:
+            if set(observations) != ids:
+                raise ValueError(f"{label} observations must match case IDs")
+            for key, state in observations.items():
+                if not isinstance(state, state_type):
+                    raise TypeError(f"{label}[{key!r}] must be {state_type.__name__}")
+
+        for bus_id, bus in case.buses.items():
+            if buses[bus_id].phases != bus.phases:
+                raise ValueError(f"Bus {bus_id} observation phases do not match")
+        for connected in case.bess:
+            state = bess[connected.id]
+            if state.phases != connected.connection.phases:
+                raise ValueError(f"BESS {connected.id!r} observation phases do not match")
+            device = connected.device
+            if not device.soc_min_frac <= state.soc_before_frac <= device.soc_max_frac:
+                raise ValueError(f"Observed SoC outside limits for {connected.id!r}")
+        for connected in case.pv:
+            if pv[connected.id].phases != connected.connection.phases:
+                raise ValueError(f"PV {connected.id!r} observation phases do not match")
+
     def _clear_results(self):
         self.case.summary = None
         if hasattr(self.case, "formulation"):
@@ -223,3 +302,10 @@ class TemporalTeacher:
 
 class BessOpt(Teacher):
     """Backward-compatible name for Teacher."""
+
+
+class ThreePhaseTeacher(Teacher):
+    """Phase-native teacher with an explicit formulation boundary."""
+
+    def __init__(self, source):
+        super().__init__(source, formulation=Formulation.THREE_PHASE_IVR)

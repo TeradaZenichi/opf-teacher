@@ -14,6 +14,7 @@ class ThreePhaseDataTest(unittest.TestCase):
         self.assertEqual(unbalanced.n_periods, balanced.n_periods)
         self.assertEqual(len(unbalanced.buses), 5)
         self.assertEqual(len(unbalanced.branches), 4)
+        self.assertEqual(unbalanced.bus_name_to_id["bus_002"], 2)
         for bus_id in balanced.buses:
             np.testing.assert_allclose(
                 unbalanced.buses[bus_id].p_load_total_kw.to_numpy(),

@@ -9,6 +9,7 @@ import pandas as pd
 
 from opf.components import Base, Bess, Pv
 from opf.three_phase.phases import normalize_phase, normalize_phases, phase_values
+from opf.three_phase.states import local_state_action, state_values
 
 
 def _profile_map(
@@ -193,6 +194,9 @@ class ConnectedBess:
     def id(self):
         return self.device.id
 
+    def state_action(self, bus):
+        return local_state_action(self, bus)
+
 
 @dataclass
 class ConnectedPv:
@@ -228,6 +232,9 @@ class ConnectedPv:
     def available_total_kw(self):
         index = next(iter(self.available_kw.values())).index
         return sum(self.available_kw.values(), start=pd.Series(0.0, index=index))
+
+    def state_action(self, bus):
+        return local_state_action(self, bus)
 
 
 @dataclass
@@ -274,6 +281,7 @@ class Case:
     dt_h: float
     price: pd.Series
     summary: object | None = field(default=None, init=False)
+    bus_name_to_id: Mapping[str, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         self.buses = dict(self.buses)
@@ -282,6 +290,7 @@ class Case:
         self.pv = list(self.pv)
         self.timestamps = list(pd.DatetimeIndex(self.timestamps))
         self.price = self.price.astype(float).copy()
+        self.bus_name_to_id = {bus.name: bus_id for bus_id, bus in self.buses.items()}
         if not self.timestamps:
             raise ValueError("Three-phase case requires at least one timestamp")
         if not math.isfinite(float(self.dt_h)) or self.dt_h <= 0.0:
@@ -339,3 +348,30 @@ class Case:
     @property
     def root(self):
         return self.grid.bus
+
+    def state_action(self):
+        """Return phase-native central X/Y for the first interval."""
+
+        if self.summary is None:
+            raise ValueError("No teacher solution; solve the observed case first")
+        x = {
+            "timestamp": self.index[0].isoformat(),
+            "dt_h": self.dt_h,
+            "phase_order": list(self.grid.phases),
+            "buses": {
+                bus_id: state_values(bus.state)
+                for bus_id, bus in sorted(self.buses.items())
+            },
+            "grid": state_values(self.grid.state),
+            "bess": {},
+            "pv": {},
+        }
+        y = {"bess": {}, "pv": {}}
+        for kind in ("bess", "pv"):
+            for device in sorted(getattr(self, kind), key=lambda item: item.id):
+                local_x, action = device.state_action(
+                    self.buses[device.connection.bus]
+                )
+                x[kind][device.id] = local_x["device"]
+                y[kind][device.id] = action
+        return x, y
