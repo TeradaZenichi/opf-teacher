@@ -15,6 +15,12 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+For use as a module from a separate training repository:
+
+```powershell
+python -m pip install -e path\to\opf-teacher
+```
+
 Gurobi is the default solver. To share a WLS license across projects, place
 `gurobi.lic` at:
 
@@ -135,6 +141,9 @@ section can override the default data filenames:
 Without this section, the conventional filenames are used. The examples under
 `examples/` follow the same contract and remain self-contained.
 
+Case files use `"schema_version": 1`. Runtime observations use the independent
+`"observation_schema_version": 1` contract.
+
 Input units are kW, kVAr, kWh, ohm, and kV. Conversion to per unit is performed
 when the Pyomo model is built.
 
@@ -236,6 +245,18 @@ solved = teacher.observe(
     pv=pv_states,
 ).solve()
 x, y = solved.state_action()
+```
+
+The named Gymnasium/OpenDSS observation can be consumed without a conversion
+layer:
+
+```python
+_, reset_info = env.reset()
+solved = ThreePhaseTeacher(case_source).observe_dict(
+    reset_info["observation"]
+).solve()
+_, action = solved.state_action()
+next_state, reward, terminated, truncated, info = env.step(action)
 ```
 
 Three-phase bus, BESS, PV, and action values are dictionaries indexed by

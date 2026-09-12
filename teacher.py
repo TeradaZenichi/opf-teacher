@@ -8,9 +8,11 @@ import math
 from pathlib import Path
 
 import pyomo.environ as pyo
+import pandas as pd
 
 from opf.formulations import Formulation, resolve_formulation
 from opf.case_source import resolve_case_source
+from opf.contracts import OBSERVATION_SCHEMA_VERSION
 from opf.single_phase.active_model import build_active_power_model, _attach_active_results
 from opf.components import Case
 from opf.data import load_case
@@ -146,6 +148,102 @@ class Teacher:
         self.model = None
         self._clear_results()
         return self
+
+    def observe_dict(self, observation: dict) -> "Teacher":
+        """Consume the versioned named observation emitted by the environment."""
+
+        version = observation.get("observation_schema_version")
+        if version != OBSERVATION_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported observation_schema_version {version!r}; "
+                f"expected {OBSERVATION_SCHEMA_VERSION}"
+            )
+        timestamp = pd.Timestamp(observation["timestamp"])
+        if timestamp != self.case.index[0]:
+            raise ValueError("Observation timestamp must match the first case timestamp")
+        if not math.isclose(
+            float(observation["dt_h"]), self.case.dt_h, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise ValueError("Observation dt_h must match the case interval")
+        self._validate_observed_grid(observation["grid"])
+
+        bus_values = self._bus_observations_by_id(observation["buses"])
+        if self.formulation is Formulation.THREE_PHASE_IVR:
+            buses = {
+                bus_id: ThreePhaseBusState(**values)
+                for bus_id, values in bus_values.items()
+            }
+            bess = {
+                device_id: ThreePhaseBessState(**values)
+                for device_id, values in observation["bess"].items()
+            }
+            pv = {
+                device_id: ThreePhasePvState(**values)
+                for device_id, values in observation["pv"].items()
+            }
+        else:
+            buses = {
+                bus_id: BusState(
+                    self._single_phase(values["v_before_pu"]),
+                    self._single_phase(values["p_load_kw"]),
+                    self._single_phase(values["q_load_kvar"]),
+                )
+                for bus_id, values in bus_values.items()
+            }
+            bess = {
+                device_id: BessState(
+                    values["soc_before_frac"],
+                    self._single_phase(values["previous_p_kw"]),
+                    self._single_phase(values["previous_q_kvar"]),
+                )
+                for device_id, values in observation["bess"].items()
+            }
+            pv = {
+                device_id: PvState(
+                    self._single_phase(values["available_kw"]),
+                    self._single_phase(values["previous_p_kw"]),
+                    self._single_phase(values["previous_q_kvar"]),
+                )
+                for device_id, values in observation["pv"].items()
+            }
+        return self.observe(buses=buses, bess=bess, pv=pv)
+
+    def _bus_observations_by_id(self, observations):
+        name_to_id = {
+            str(name).lower(): bus_id
+            for name, bus_id in self.case.bus_name_to_id.items()
+        }
+        result = {}
+        for key, values in observations.items():
+            if key in self.case.buses:
+                bus_id = key
+            else:
+                try:
+                    bus_id = name_to_id[str(key).lower()]
+                except KeyError as exc:
+                    raise ValueError(f"Unknown observed bus {key!r}") from exc
+            if bus_id in result:
+                raise ValueError(f"Duplicate observation for bus {bus_id}")
+            result[bus_id] = values
+        return result
+
+    def _validate_observed_grid(self, grid):
+        expected_buy = float(self.case.price.iloc[0])
+        expected_sell = expected_buy * self.case.grid.feed_in_ratio
+        if not math.isclose(
+            float(grid["buy_price_per_kwh"]), expected_buy,
+            rel_tol=0.0, abs_tol=1e-12,
+        ) or not math.isclose(
+            float(grid["sell_price_per_kwh"]), expected_sell,
+            rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise ValueError("Observed grid prices must match the case tariffs")
+
+    @staticmethod
+    def _single_phase(values):
+        if set(values) != {"a"}:
+            raise ValueError("Single-phase observations must contain only phase 'a'")
+        return float(values["a"])
 
     def solve(self, solver: str | None = None, tee: bool = False,
               socp_gap_tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE,

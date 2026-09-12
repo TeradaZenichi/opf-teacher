@@ -102,23 +102,35 @@ class ThreePhaseContractTest(unittest.TestCase):
     def test_three_phase_teacher_uses_phase_native_pre_action_observation(self):
         case = self.valid_case()
         teacher = ThreePhaseTeacher(case)
-        buses = {
-            bus_id: BusState(
-                v_before_pu={phase: 1.0 for phase in bus.phases},
-                angle_before_deg={"a": 0.0, "b": -120.0, "c": 120.0},
-                p_load_kw={
-                    phase: float(bus.p_load_kw[phase].iloc[0])
-                    for phase in bus.phases
-                },
-                q_load_kvar={
-                    phase: float(bus.q_load_kvar[phase].iloc[0])
-                    for phase in bus.phases
-                },
-            )
-            for bus_id, bus in case.buses.items()
+        observation = {
+            "observation_schema_version": 1,
+            "timestamp": case.index[0].isoformat(),
+            "dt_h": case.dt_h,
+            "phase_order": ["a", "b", "c"],
+            "buses": {
+                bus.name: {
+                    "v_before_pu": {phase: 1.0 for phase in bus.phases},
+                    "angle_before_deg": {"a": 0.0, "b": -120.0, "c": 120.0},
+                    "p_load_kw": {
+                        phase: float(bus.p_load_kw[phase].iloc[0])
+                        for phase in bus.phases
+                    },
+                    "q_load_kvar": {
+                        phase: float(bus.q_load_kvar[phase].iloc[0])
+                        for phase in bus.phases
+                    },
+                }
+                for bus in case.buses.values()
+            },
+            "grid": {
+                "buy_price_per_kwh": 0.5,
+                "sell_price_per_kwh": 0.25,
+            },
+            "bess": {},
+            "pv": {},
         }
 
-        solved = teacher.observe(buses=buses, bess={}, pv={}).solve()
+        solved = teacher.observe_dict(observation).solve()
         x, y = solved.state_action()
 
         self.assertEqual(x["timestamp"], self.index[0].isoformat())

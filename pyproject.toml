@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opf-teacher"
+version = "0.1.0"
+description = "Optimization teachers for balanced and unbalanced distribution OPF"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "OpenDSSDirect.py>=0.9,<1",
+    "pandas>=3,<4",
+    "Pyomo>=6.10,<7",
+    "scipy>=1.18,<2",
+]
+
+[project.optional-dependencies]
+highs = ["highspy>=1.15,<2"]
+gurobi = ["gurobipy>=13,<14"]
+plot = ["matplotlib>=3.10,<4"]
+
+[tool.setuptools]
+py-modules = ["teacher"]
+
+[tool.setuptools.packages.find]
+include = ["opf*"]

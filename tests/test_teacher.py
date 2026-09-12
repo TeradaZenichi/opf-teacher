@@ -64,6 +64,54 @@ class TeacherTest(unittest.TestCase):
         x["bess"]["b1"]["soc_before_frac"] = 0.1
         self.assertEqual(solved.state_action()[0]["bess"]["b1"]["soc_before_frac"], 0.7)
 
+    def test_named_environment_observation_is_accepted_directly(self):
+        case = self.case
+        observation = {
+            "observation_schema_version": 1,
+            "timestamp": case.index[0].isoformat(),
+            "dt_h": case.dt_h,
+            "phase_order": ["a"],
+            "buses": {
+                bus.name: {
+                    "v_before_pu": {"a": 1.0},
+                    "angle_before_deg": {"a": 0.0},
+                    "p_load_kw": {"a": float(bus.p_load_kw.iloc[0])},
+                    "q_load_kvar": {"a": float(bus.q_load_kw.iloc[0])},
+                }
+                for bus in case.buses.values()
+            },
+            "grid": {
+                "buy_price_per_kwh": float(case.price.iloc[0]),
+                "sell_price_per_kwh": float(case.price.iloc[0]) * case.grid.feed_in_ratio,
+            },
+            "bess": {
+                device.id: {
+                    "soc_before_frac": device.soc_init_frac,
+                    "previous_p_kw": {"a": 0.0},
+                    "previous_q_kvar": {"a": 0.0},
+                }
+                for device in case.bess
+            },
+            "pv": {
+                device.id: {
+                    "available_kw": {"a": float(device.avail_kw.iloc[0])},
+                    "previous_p_kw": {"a": 0.0},
+                    "previous_q_kvar": {"a": 0.0},
+                }
+                for device in case.pv
+            },
+        }
+
+        solved = self.teacher.observe_dict(observation).solve()
+        x, _ = solved.state_action()
+
+        self.assertEqual(x["timestamp"], observation["timestamp"])
+        self.assertEqual(x["bess"]["b1"]["soc_before_frac"], 0.5)
+
+    def test_named_observation_version_is_required(self):
+        with self.assertRaisesRegex(ValueError, "observation_schema_version"):
+            self.teacher.observe_dict({"observation_schema_version": 2})
+
     def test_multiple_devices_and_local_bus_validation(self):
         extra = deepcopy(self.case.bess[0])
         extra.id, extra.bus = "b2", 3

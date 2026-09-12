@@ -1,5 +1,6 @@
 """OPF for battery storage and distributed generation."""
 from opf.components import (Base, Bess, Branch, Bus, Case, Grid, Pv, Summary)
+from opf.contracts import OBSERVATION_SCHEMA_VERSION
 from opf.active_model import build_active_power_model, solve_active_power_opf
 from opf.data import load_case
 from opf.export import (
@@ -21,5 +22,5 @@ __all__ = [
     "timeseries_dataframe", "devices_dataframe", "buses_dataframe",
     "branches_dataframe", "summary_dataframe", "write_result_csvs",
     "OpenDSSBusData", "OpenDSSBranchData", "OpenDSSNetworkData",
-    "load_opendss_network",
+    "load_opendss_network", "OBSERVATION_SCHEMA_VERSION",
 ]
