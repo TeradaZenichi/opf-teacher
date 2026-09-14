@@ -2,13 +2,14 @@ import unittest
 
 import pandas as pd
 
-from opf.components import Base, Pv
+from opf.components import Base, Bess, Pv
 from opf.three_phase import (
     BessAction,
     Branch,
     Bus,
     BusState,
     Case,
+    ConnectedBess,
     ConnectedPv,
     DeviceConnection,
     Grid,
@@ -144,6 +145,248 @@ class ThreePhaseContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "violates network limits"):
             Teacher(case, formulation="three_phase_ivr").solve()
+
+    def test_multiple_bess_and_reactive_dispatch_are_supported(self):
+        case = self.valid_case()
+        case.grid.q_max_kvar = 0.1
+        case.bess = [
+            ConnectedBess(
+                Bess(
+                    id=device_id,
+                    bus=2,
+                    e_cap_kwh=10.0,
+                    p_charge_max_kw=2.0,
+                    p_discharge_max_kw=2.0,
+                    eta_charge=0.95,
+                    eta_discharge=0.95,
+                    soc_init_frac=0.5,
+                    soc_min_frac=0.1,
+                    soc_max_frac=0.9,
+                    cyclic_soc=True,
+                    s_max_kva=5.0,
+                    reactive_control=True,
+                ),
+                DeviceConnection(bus=2, phases=("a", "b", "c")),
+            )
+            for device_id in ("b1", "b2")
+        ]
+
+        solved = ThreePhaseTeacher(case).solve(maxiter=500)
+
+        self.assertEqual({device.id for device in solved.bess}, {"b1", "b2"})
+        self.assertTrue(all(device.result is not None for device in solved.bess))
+        total_q = sum(
+            device.result.q_injection_total_kvar.iloc[0]
+            for device in solved.bess
+        )
+        self.assertGreater(total_q, 0.0)
+        self.assertLessEqual(abs(solved.grid.result.q_total_kvar.iloc[0]), 0.1 + 1e-5)
+
+    def test_three_phase_volt_var_and_volt_watt_controls(self):
+        for control, slack_voltage in (("volt-var", 0.95), ("volt-watt", 1.10)):
+            with self.subTest(control=control):
+                case = self.valid_case()
+                case.grid.v_ref_pu = {
+                    phase: slack_voltage for phase in case.grid.phases
+                }
+                for bus in case.buses.values():
+                    bus.v_min_pu = {phase: 0.90 for phase in bus.phases}
+                    bus.v_max_pu = {phase: 1.15 for phase in bus.phases}
+                device = Pv(
+                    id="pv1",
+                    bus=2,
+                    p_max_kw=6.0,
+                    s_max_kva=8.0,
+                    control=control,
+                    curtailable=True,
+                    power_factor=1.0,
+                    avail_kw=self.profile(6.0),
+                )
+                case.pv = [ConnectedPv(
+                    device=device,
+                    connection=DeviceConnection(
+                        bus=2, phases=("a", "b", "c")
+                    ),
+                    available_kw={
+                        phase: self.profile(2.0)
+                        for phase in ("a", "b", "c")
+                    },
+                )]
+
+                solved = ThreePhaseTeacher(case).solve(maxiter=500)
+                pv = solved.pv[0].result
+
+                if control == "volt-var":
+                    self.assertGreater(pv.q_injection_total_kvar.iloc[0], 0.0)
+                else:
+                    self.assertGreater(pv.curtailment_total_kw.iloc[0], 0.0)
+
+    def test_per_phase_pv_dispatch_responds_to_each_phase_voltage(self):
+        case = self.valid_case()
+        case.grid.v_ref_pu = {"a": 1.10, "b": 1.00, "c": 1.00}
+        for bus in case.buses.values():
+            bus.v_min_pu = {phase: 0.90 for phase in bus.phases}
+            bus.v_max_pu = {phase: 1.15 for phase in bus.phases}
+        device = Pv(
+            id="pv1",
+            bus=2,
+            p_max_kw=6.0,
+            s_max_kva=8.0,
+            control="volt-watt",
+            curtailable=True,
+            power_factor=1.0,
+            avail_kw=self.profile(6.0),
+        )
+        case.pv = [ConnectedPv(
+            device=device,
+            connection=DeviceConnection(
+                bus=2,
+                phases=("a", "b", "c"),
+                dispatch_mode="per_phase",
+            ),
+            available_kw={
+                phase: self.profile(2.0)
+                for phase in ("a", "b", "c")
+            },
+        )]
+
+        solved = ThreePhaseTeacher(case).solve(maxiter=500)
+        result = solved.pv[0].result
+
+        self.assertLess(
+            result.generation_kw["a"].iloc[0],
+            result.generation_kw["b"].iloc[0],
+        )
+        self.assertAlmostEqual(
+            result.generation_total_kw.iloc[0],
+            sum(result.generation_kw[p].iloc[0] for p in ("a", "b", "c")),
+        )
+
+    def test_per_phase_bess_dispatch_exposes_active_and_reactive_phases(self):
+        case = self.valid_case()
+        case.grid.q_max_kvar = 0.1
+        case.bess = [ConnectedBess(
+            Bess(
+                id="b1",
+                bus=2,
+                e_cap_kwh=20.0,
+                p_charge_max_kw=5.0,
+                p_discharge_max_kw=5.0,
+                eta_charge=0.95,
+                eta_discharge=0.95,
+                soc_init_frac=0.5,
+                soc_min_frac=0.1,
+                soc_max_frac=0.9,
+                cyclic_soc=True,
+                s_max_kva=9.0,
+                reactive_control=True,
+            ),
+            DeviceConnection(
+                bus=2,
+                phases=("a", "b", "c"),
+                dispatch_mode="per_phase",
+            ),
+        )]
+
+        solved = ThreePhaseTeacher(case).solve(maxiter=500)
+        result = solved.bess[0].result
+
+        self.assertEqual(set(result.p_net_kw), {"a", "b", "c"})
+        self.assertEqual(set(result.q_injection_kvar), {"a", "b", "c"})
+        self.assertAlmostEqual(
+            result.p_net_total_kw.iloc[0],
+            sum(result.p_net_kw[phase].iloc[0] for phase in ("a", "b", "c")),
+        )
+        self.assertGreater(result.q_injection_total_kvar.iloc[0], 0.0)
+
+    def test_delta_bess_and_pv_use_line_to_line_power_flow(self):
+        case = self.valid_case()
+        case.bess = [ConnectedBess(
+            Bess(
+                id="b1",
+                bus=2,
+                e_cap_kwh=20.0,
+                p_charge_max_kw=3.0,
+                p_discharge_max_kw=3.0,
+                eta_charge=0.95,
+                eta_discharge=0.95,
+                soc_init_frac=0.5,
+                soc_min_frac=0.1,
+                soc_max_frac=0.9,
+                cyclic_soc=True,
+                s_max_kva=6.0,
+                reactive_control=True,
+            ),
+            DeviceConnection(
+                bus=2,
+                phases=("a", "b", "c"),
+                connection="delta",
+                dispatch_mode="per_phase",
+            ),
+        )]
+        pv_device = Pv(
+            id="pv1",
+            bus=2,
+            p_max_kw=6.0,
+            s_max_kva=8.0,
+            control="optimal",
+            curtailable=True,
+            power_factor=1.0,
+            avail_kw=self.profile(6.0),
+        )
+        case.pv = [ConnectedPv(
+            pv_device,
+            DeviceConnection(
+                bus=2,
+                phases=("a", "b", "c"),
+                connection="delta",
+                dispatch_mode="per_phase",
+            ),
+            {phase: self.profile(2.0) for phase in ("a", "b", "c")},
+        )]
+
+        solved = ThreePhaseTeacher(case).solve(maxiter=500)
+
+        self.assertLess(solved.quality["max_power_flow_residual_a"], 1e-5)
+        self.assertEqual(
+            set(solved.bess[0].result.p_net_kw), {"a", "b", "c"}
+        )
+        self.assertEqual(
+            set(solved.pv[0].result.generation_kw), {"a", "b", "c"}
+        )
+
+    def test_delta_volt_var_watt_uses_line_to_line_voltage(self):
+        case = self.valid_case()
+        case.grid.v_ref_pu = {phase: 1.10 for phase in case.grid.phases}
+        for bus in case.buses.values():
+            bus.v_min_pu = {phase: 0.90 for phase in bus.phases}
+            bus.v_max_pu = {phase: 1.15 for phase in bus.phases}
+        device = Pv(
+            id="pv1",
+            bus=2,
+            p_max_kw=6.0,
+            s_max_kva=8.0,
+            control="volt-var-watt",
+            curtailable=True,
+            power_factor=1.0,
+            avail_kw=self.profile(6.0),
+        )
+        case.pv = [ConnectedPv(
+            device,
+            DeviceConnection(
+                bus=2,
+                phases=("a", "b", "c"),
+                connection="delta",
+                dispatch_mode="per_phase",
+            ),
+            {phase: self.profile(2.0) for phase in ("a", "b", "c")},
+        )]
+
+        solved = ThreePhaseTeacher(case).solve(maxiter=500)
+        result = solved.pv[0].result
+
+        self.assertLess(result.generation_total_kw.iloc[0], 6.0)
+        self.assertLess(result.q_injection_total_kvar.iloc[0], 0.0)
 
     def test_states_and_actions_are_phase_indexed(self):
         state = BusState(

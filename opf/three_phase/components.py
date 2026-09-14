@@ -1,4 +1,4 @@
-"""Phase-native network and device contracts for unbalanced OPF."""
+"""Network and device classes for unbalanced three-phase OPF."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -350,7 +350,7 @@ class Case:
         return self.grid.bus
 
     def state_action(self):
-        """Return phase-native central X/Y for the first interval."""
+        """Return central X/Y data for the first three-phase interval."""
 
         if self.summary is None:
             raise ValueError("No teacher solution; solve the observed case first")

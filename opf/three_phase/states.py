@@ -1,4 +1,4 @@
-"""Pre-action observations and commands for phase-native teachers."""
+"""Pre-action observations and commands for three-phase teachers."""
 from __future__ import annotations
 
 from copy import deepcopy

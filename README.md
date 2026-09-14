@@ -50,7 +50,7 @@ Run:
 With `ACTIVE_POWER_ONLY = True`, `main.py` also writes the devices, buses,
 branches, and summary CSVs under `results/`.
 
-The demand-unbalanced three-phase example uses the phase-native AC-IVR solver:
+The demand-unbalanced three-phase example uses the three-phase AC-IVR solver:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_three_phase_opf.py
@@ -178,7 +178,7 @@ Supported network elements:
 - radial topology;
 - single-phase equivalent or balanced three-phase lines using `R1`, `X1`,
   `Length`, and `NormAmps`;
-- phase-native radial lines using full `Rmatrix` and `Xmatrix`, including mutual
+- three-phase radial lines using full `Rmatrix` and `Xmatrix`, including mutual
   coupling;
 - three-phase, two-winding transformers;
 - transformer `kV`, `kVA`, `%R`, `XHL`, connection, and fixed tap;
@@ -190,11 +190,19 @@ Not yet supported:
 - single-phase transformer banks;
 - transformers with three or more windings;
 - automatic `RegControl` actions;
-- transformers, delta devices, and explicit neutrals in the phase-native model.
+- ungrounded `wye-delta`/`delta-delta` transformer secondaries and explicit
+  neutrals in the three-phase model.
 
-The initial phase-native formulation supports grounded-wye-equivalent cases
-whose neutral has already been Kron-reduced into the line matrices. Imbalance
-is specified explicitly in phase demand columns.
+The three-phase formulation supports grounded-wye loads and `wye` or `delta`
+controllable devices. For delta devices, action keys `a`, `b`, and `c` represent
+the `a-c`, `b-a`, and `c-b` legs. Explicit neutrals remain Kron-reduced into the
+line matrices. Imbalance is specified explicitly in phase demand columns.
+
+The three-phase AC-IVR solver supports multiple BESS, aggregate or independent
+per-phase dispatch, BESS reactive control and inverter losses, optimal/fixed-PF
+PV operation, Volt-VAr, Volt-Watt and combined curves. Three-phase two-winding
+`wye-wye` and `delta-wye` transformers use their fixed tap and phase shift while
+preserving each bus voltage base.
 
 ## Python API
 
@@ -232,7 +240,7 @@ unbalanced = Teacher(
 ).solve()
 ```
 
-For phase-native observations, use the explicit teacher boundary:
+For three-phase observations, use `ThreePhaseTeacher`:
 
 ```python
 from teacher import ThreePhaseTeacher
@@ -264,9 +272,9 @@ Three-phase bus, BESS, PV, and action values are dictionaries indexed by
 single-phase teacher.
 
 The existing models are single-phase equivalents for balanced systems and live
-under `opf/single_phase/`. Phase-native buses, branches, device connections,
+under `opf/single_phase/`. Three-phase buses, branches, device connections,
 states, actions, and results are available under `opf/three_phase/`; see the
-[three-phase contract](docs/three-phase-contract.md). The phase-native loader
+[three-phase contract](docs/three-phase-contract.md). The three-phase loader
 requires `P<bus>_<phase>` and `Q<bus>_<phase>` demand columns and the AC-IVR
 solver retains the full line impedance matrices.
 

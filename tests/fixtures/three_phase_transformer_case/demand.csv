@@ -1,0 +1,3 @@
+timestamp,Psource_a,Qsource_a,Psource_b,Qsource_b,Psource_c,Qsource_c,Plow_a,Qlow_a,Plow_b,Qlow_b,Plow_c,Qlow_c,Pload_a,Qload_a,Pload_b,Qload_b,Pload_c,Qload_c
+2026-01-01 00:00:00,0,0,0,0,0,0,0,0,0,0,0,0,8,2,7,2,5,1
+2026-01-01 01:00:00,0,0,0,0,0,0,0,0,0,0,0,0,10,2.5,8,2,7,1.5

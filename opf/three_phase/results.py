@@ -97,6 +97,11 @@ class GridResult:
         index = next(iter(self.export_kw.values())).index
         return sum(self.export_kw.values(), start=pd.Series(0.0, index=index))
 
+    @property
+    def q_total_kvar(self):
+        index = next(iter(self.q_kvar.values())).index
+        return sum(self.q_kvar.values(), start=pd.Series(0.0, index=index))
+
 
 @dataclass
 class BessResult:
@@ -129,6 +134,13 @@ class BessResult:
     def p_net_total_kw(self):
         index = next(iter(self.p_net_kw.values())).index
         return sum(self.p_net_kw.values(), start=pd.Series(0.0, index=index))
+
+    @property
+    def q_injection_total_kvar(self):
+        index = next(iter(self.q_injection_kvar.values())).index
+        return sum(
+            self.q_injection_kvar.values(), start=pd.Series(0.0, index=index)
+        )
 
 
 @dataclass
@@ -164,3 +176,17 @@ class PvResult:
     def generation_total_kw(self):
         index = next(iter(self.generation_kw.values())).index
         return sum(self.generation_kw.values(), start=pd.Series(0.0, index=index))
+
+    @property
+    def q_injection_total_kvar(self):
+        index = next(iter(self.q_injection_kvar.values())).index
+        return sum(
+            self.q_injection_kvar.values(), start=pd.Series(0.0, index=index)
+        )
+
+    @property
+    def curtailment_total_kw(self):
+        index = next(iter(self.curtailment_kw.values())).index
+        return sum(
+            self.curtailment_kw.values(), start=pd.Series(0.0, index=index)
+        )

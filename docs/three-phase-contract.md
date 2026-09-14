@@ -1,8 +1,7 @@
 # Unbalanced three-phase contract
 
 The `opf.three_phase` package is independent from the existing single-phase
-equivalent formulations. It defines the data boundary that the AC-IVR model
-consumes.
+equivalent formulations. It defines the data read by the AC-IVR model.
 
 ## Phase names
 
@@ -19,7 +18,10 @@ are provided only for reporting and compatibility.
 `Branch` stores the complete complex series-impedance matrix in the exact order
 given by `phases`. Off-diagonal entries represent mutual coupling. Ampacity can
 be scalar or phase-specific. A full complex tap matrix is also supported by the
-contract.
+contract. The solver uses this matrix for lines and two-winding `wye-wye` and
+`delta-wye` transformers, including fixed taps, transformer phase shift, and
+different voltage bases at each bus. The receiving `wye` winding is treated as
+grounded.
 
 `Grid` requires voltage magnitude and angle references per phase. `Case`
 validates bus, branch, grid, device, timestamp, and phase consistency before a
@@ -39,20 +41,28 @@ aggregate profile:
 - PV generation is positive.
 
 Actions expose phase values and aggregate-total properties. BESS SoC remains a
-single shared energy state.
+single shared energy state. Aggregate dispatch is balanced among the connected
+phases. Per-phase dispatch keeps independent phase commands while enforcing the
+inverter rating, aggregate active-power limits, and shared SoC.
 
-## Current boundary
+For a three-phase `delta` device, public keys identify OpenDSS winding legs:
+`a = a-c`, `b = b-a`, and `c = c-b`. Volt-VAr and Volt-Watt use the
+corresponding line-to-line voltage divided by its nominal line-to-line base.
 
-The phase-native contract, case loader, reduced-space AC-IVR power flow,
-time-coupled BESS optimization, result attachment, and CSV exports are
-implemented. The current solver uses SciPy SLSQP and therefore reports a local,
+## Current support
+
+The three-phase data classes, case loader, nonlinear AC-IVR power flow,
+multiple time-coupled BESS, aggregate and per-phase dispatch, `wye` and `delta`
+devices, reactive BESS operation, controllable PV, Volt-VAr/Volt-Watt curves,
+transformer taps and phase shift, result attachment, and CSV exports are
+implemented. SciPy SLSQP therefore reports a local,
 physically feasible solution rather than a global-optimality certificate.
 
-The following remain deliberately unavailable:
+The following are not supported:
 
 - explicit neutral-conductor modeling.
-- delta-connected devices and transformers;
-- independent per-phase device dispatch;
+- ungrounded `wye-delta` and `delta-delta` transformer secondaries;
+- single-phase transformer banks and transformers with more than two windings;
 - SDP certification of the local solution.
 
 Use `Teacher(path, formulation="three_phase_ivr").solve()` for a phase-indexed

@@ -535,8 +535,19 @@ def _orient_radial(
                 continue
             visited.add(child)
             queue.append(child)
-            tap_ratio = (1.0 / branch.tap_ratio if branch.from_bus != parent else branch.tap_ratio)
-            oriented.append(replace(branch, from_bus=parent, to_bus=child, tap_ratio=tap_ratio))
+            reversed_branch = branch.from_bus != parent
+            tap_ratio = 1.0 / branch.tap_ratio if reversed_branch else branch.tap_ratio
+            connections = (
+                tuple(reversed(branch.connections))
+                if reversed_branch and branch.connections else branch.connections
+            )
+            oriented.append(replace(
+                branch,
+                from_bus=parent,
+                to_bus=child,
+                tap_ratio=tap_ratio,
+                connections=connections,
+            ))
 
     missing = set(bus_ids) - visited
     if missing:

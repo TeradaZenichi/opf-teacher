@@ -1,4 +1,4 @@
-"""Phase-native contracts and unbalanced multiphase OPF formulations."""
+"""Data classes and solvers for unbalanced three-phase OPF."""
 
 from opf.three_phase.components import (
     Branch,

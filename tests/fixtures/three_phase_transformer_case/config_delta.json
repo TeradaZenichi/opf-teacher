@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "three-phase-delta-wye-transformer-case",
+  "formulation": "three_phase_ivr",
+  "files": {
+    "demand": "demand.csv",
+    "prices": "price.csv",
+    "devices": "devices.json"
+  },
+  "base": {"s_base_kva": 1000.0, "v_base_kv": 11.0},
+  "network": {
+    "master": "dss/Master_delta.dss",
+    "slack_bus": "source",
+    "bus_ids": {"source": 1, "low": 2, "load": 3}
+  },
+  "grid": {
+    "bus": "source",
+    "v_ref_pu": {"a": 1.0, "b": 1.0, "c": 1.0},
+    "angle_ref_deg": {"a": 0.0, "b": -120.0, "c": 120.0},
+    "p_import_max_kw": 1000.0,
+    "p_export_max_kw": 1000.0,
+    "q_max_kvar": 1000.0,
+    "feed_in_tariff_ratio": 1.0
+  },
+  "voltage_limits": {"v_min_pu": 0.90, "v_max_pu": 1.10}
+}

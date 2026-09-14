@@ -1,4 +1,4 @@
-"""Wide CSV exports for phase-native OPF results."""
+"""Wide CSV exports for three-phase OPF results."""
 from __future__ import annotations
 
 import re

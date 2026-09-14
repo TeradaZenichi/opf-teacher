@@ -27,6 +27,41 @@ from opf.three_phase.phases import normalize_phases
 _DEMAND_COLUMN = re.compile(r"^(P|Q)(.+)_([abcABC123])$")
 
 
+class TransformerBranch:
+    def __init__(self, source, buses):
+        self.source = source
+        self.phases = normalize_phases(source.phases)
+        if len(self.phases) != 3 or source.connections not in {("wye", "wye"), ("delta", "wye")}:
+            raise ValueError(
+                "Three-phase IVR requires a grounded-wye receiving winding; "
+                f"got {source.connections!r} for {source.name!r}"
+            )
+        from_base = buses[source.from_bus].kv_base_ln
+        to_base = buses[source.to_bus].kv_base_ln
+        if not from_base or not to_base:
+            raise ValueError(f"Transformer {source.name!r} requires voltage bases at both buses")
+        if source.impedance_base_kva is None:
+            raise ValueError(f"Transformer {source.name!r} requires an impedance rating")
+
+        from_connection, to_connection = source.connections
+        from_coil_base = self._coil_base(from_base, from_connection)
+        to_coil_base = self._coil_base(to_base, to_connection)
+        z_base = 3.0 * from_coil_base ** 2 * 1e3 / source.impedance_base_kva
+        z_value = complex(source.r_pu_on_rating * z_base, source.x_pu_on_rating * z_base)
+        ratio = from_coil_base / to_coil_base / source.tap_ratio
+        self.impedance = self._diagonal(z_value)
+        self.tap = self._diagonal(ratio)
+        self.norm_amps = source.s_max_kva / (3.0 * from_coil_base)
+
+    def _diagonal(self, value):
+        size = len(self.phases)
+        return tuple(tuple(value if row == column else 0.0j for column in range(size)) for row in range(size))
+
+    @staticmethod
+    def _coil_base(bus_base, connection):
+        return bus_base * (math.sqrt(3.0) if connection == "delta" else 1.0)
+
+
 def load_case(path: str | Path) -> Case:
     path, config_path = resolve_case_source(path)
     cfg = _read_json(config_path)
@@ -90,29 +125,38 @@ def load_case(path: str | Path) -> Case:
 
     branches = []
     for source in network.branches:
-        if source.element_type != "line":
-            raise ValueError(
-                f"Three-phase IVR currently supports lines only; got "
-                f"{source.element_type!r} for {source.name!r}"
-            )
         phases = normalize_phases(source.phases)
         size = len(phases)
-        if len(source.r_matrix_ohm) != size or len(source.x_matrix_ohm) != size:
-            raise ValueError(f"Branch {source.name!r} requires complete Rmatrix and Xmatrix")
-        impedance = tuple(
-            tuple(
-                complex(source.r_matrix_ohm[row][column], source.x_matrix_ohm[row][column])
-                for column in range(size)
+        if source.element_type == "line":
+            if len(source.r_matrix_ohm) != size or len(source.x_matrix_ohm) != size:
+                raise ValueError(f"Branch {source.name!r} requires complete Rmatrix and Xmatrix")
+            impedance = tuple(
+                tuple(
+                    complex(source.r_matrix_ohm[row][column], source.x_matrix_ohm[row][column])
+                    for column in range(size)
+                )
+                for row in range(size)
             )
-            for row in range(size)
-        )
+            tap_matrix = None
+            norm_amps = source.norm_amps
+        elif source.element_type == "transformer":
+            transformer = TransformerBranch(source, buses)
+            impedance = transformer.impedance
+            tap_matrix = transformer.tap
+            norm_amps = transformer.norm_amps
+        else:
+            raise ValueError(
+                f"Three-phase IVR does not support branch type "
+                f"{source.element_type!r} for {source.name!r}"
+            )
         branches.append(Branch(
             name=source.name,
             from_bus=source.from_bus,
             to_bus=source.to_bus,
             phases=phases,
             z_matrix_ohm=impedance,
-            norm_amps=source.norm_amps,
+            norm_amps=norm_amps,
+            tap_matrix=tap_matrix,
             element_type=source.element_type,
             connections=source.connections,
         ))
