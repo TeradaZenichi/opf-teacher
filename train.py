@@ -31,13 +31,13 @@ def main(window=WINDOW):
     selector = PairSelector(original_case, OBSERVATION_MODE, DEVICE_ID)
     normalizer = PerUnitNormalizer(original_case.base)
     time_encoder = TimeEncoder()
-    env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods, ()))
+    env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods))
     rows = []
-    env.reset()
+    observation, _ = env.reset()
     for step in original_case.periods:
         horizon = original_case.horizon(start=step)
         teacher = Teacher(horizon, formulation=FORMULATION)
-        teacher.observe_dict(env.observe())
+        teacher.observe_dict(observation)
         teacher.build()
         solved = teacher.solve()
         state, action = solved.state_action()
@@ -47,7 +47,7 @@ def main(window=WINDOW):
         normalized_state.pop("phase_order", None)
         normalized_action = normalizer.normalize(selected_action)
         pair = history.append(normalized_state, normalized_action)
-        _, _, terminated, truncated, _ = env.step(action)
+        observation, _, terminated, truncated, _ = env.step(action)
 
         if pair is not None:
             states, current_action = pair

@@ -23,13 +23,13 @@ def main():
     normalizer = PerUnitNormalizer(original_case.base)
     time_encoder = TimeEncoder()
     history = StateActionHistory(window=WINDOW)
-    env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods, ()))
+    env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods))
     rows = []
-    env.reset()
+    observation, _ = env.reset()
     for step in original_case.periods:
         horizon = original_case.horizon(start=step)
         teacher = Teacher(horizon, formulation=FORMULATION)
-        teacher.observe_dict(env.observe())
+        teacher.observe_dict(observation)
         teacher.build()
         solved = teacher.solve()
         state, action = solved.state_action()
@@ -37,7 +37,7 @@ def main():
         normalized_state["time"] = time_encoder.encode(normalized_state.pop("timestamp"))
         normalized_action = normalizer.normalize(action)
         pair = history.append(normalized_state, normalized_action)
-        _, _, terminated, truncated, _ = env.step(action)
+        observation, _, terminated, truncated, _ = env.step(action)
 
         if pair is not None:
             states, current_action = pair

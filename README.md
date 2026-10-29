@@ -316,6 +316,20 @@ Observed states include the resulting SoC and previously applied device powers.
 Set `CASE_PATH` and `FORMULATION` together when selecting another scenario;
 the script also accepts SOCP and three-phase cases.
 
+`reset()` returns the initial named physical observation. Each `step(action)`
+executes the global physical action and returns the next named observation,
+ready for `teacher.observe_dict(observation)` at the next timestamp. `observe()`
+returns the same current snapshot without advancing time. At episode end,
+`step()` returns `None` for the next observation and sets `terminated=True`.
+`info["observation_before"]` records the observation used for the executed
+action; the other step measurements describe the executed snapshot.
+
+The observations keep voltage in pu and powers in kW/kvar. The training script
+selects the local/central view, converts powers to pu and encodes time before
+adding X/Y to the history. `PerUnitNormalizer.denormalize()` converts a predicted
+normalized action back to physical units before execution. The environment
+does not import the teacher or its preprocessing code.
+
 The outputs are `results/train.csv` and `results/train.json`. The JSON records
 the scenario, formulation, observation mode, selected BESS/bus, window, phase order, number of pairs, bases and time
 encoding. Phase order stays in this metadata so the columns under X remain
