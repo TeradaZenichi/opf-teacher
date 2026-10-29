@@ -54,7 +54,9 @@ class PUNormalizer:
     def normalize(self, values):
         result = {}
         for name, value in values.items():
-            if name in POWER_FIELDS:
+            if name == "units" and value == "physical":
+                result[name] = "pu"
+            elif name in POWER_FIELDS:
                 result[POWER_FIELDS[name]] = _scale_power(value, 1.0 / self.s_base_kva)
             elif isinstance(value, dict):
                 result[name] = self.normalize(value)
@@ -65,7 +67,9 @@ class PUNormalizer:
     def denormalize(self, values):
         result = {}
         for name, value in values.items():
-            if name in PHYSICAL_POWER_FIELDS:
+            if name == "units" and value == "pu":
+                result[name] = "physical"
+            elif name in PHYSICAL_POWER_FIELDS:
                 result[PHYSICAL_POWER_FIELDS[name]] = _scale_power(value, self.s_base_kva)
             elif isinstance(value, dict):
                 result[name] = self.denormalize(value)
@@ -75,6 +79,8 @@ class PUNormalizer:
 
     def require_pu(self, values):
         for name, value in values.items():
+            if name == "units" and value != "pu":
+                raise ValueError("Expected units='pu'")
             if isinstance(name, str) and name.endswith(("_kw", "_kvar")):
                 raise ValueError(f"Expected per-unit fields; received physical field {name!r}")
             if isinstance(value, dict):

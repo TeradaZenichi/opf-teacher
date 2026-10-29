@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pu-normalizer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Shared per-unit boundary conversions for OPF teachers and OpenDSS environments"
 requires-python = ">=3.11"
 

@@ -5,6 +5,15 @@ from pu_normalizer import PUNormalizer
 
 
 class PUNormalizerTest(unittest.TestCase):
+    def test_unit_metadata_follows_the_direction_of_conversion(self):
+        normalizer = PUNormalizer(1000.0, 11.0)
+        physical = {"units": "physical", "p_net_kw": -20.0}
+        normalized = normalizer.normalize(physical)
+        self.assertEqual(normalized, {"units": "pu", "p_net_pu": -0.02})
+        self.assertEqual(normalizer.denormalize(normalized), physical)
+        with self.assertRaisesRegex(ValueError, "units"):
+            normalizer.require_pu(physical)
+
     def test_aggregate_and_phase_powers_share_the_network_base(self):
         normalizer = PUNormalizer(1000.0, 11.0)
         physical = {
