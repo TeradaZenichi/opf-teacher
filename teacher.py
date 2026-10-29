@@ -11,6 +11,7 @@ from pathlib import Path
 import pyomo.environ as pyo
 import pandas as pd
 
+from normalization import PUNormalizer
 from opf.formulations import Formulation, parse_formulation
 from opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_source
 
@@ -61,6 +62,7 @@ class Teacher:
                 raise TypeError("three_phase_ivr requires an opf.three_phase.Case")
         elif not isinstance(self.case, components.Case):
             raise TypeError("Single-phase formulations require an opf.single_phase.components.Case")
+        self.normalizer = PUNormalizer(self.case.base.s_base_kva, self.case.base.v_base_kv)
         self.model: object | None = None
 
     def build(self, tie_break_penalty: float = active_model.DEFAULT_TIE_BREAK_PENALTY) -> "Teacher":
@@ -144,7 +146,7 @@ class Teacher:
         return self
 
     def observe_dict(self, observation: dict) -> "Teacher":
-        """Consume the versioned named observation emitted by the environment."""
+        """Consume named pu observations and convert only at the model boundary."""
 
         version = observation.get("observation_schema_version")
         if version != OBSERVATION_SCHEMA_VERSION:
@@ -152,6 +154,13 @@ class Teacher:
                 f"Unsupported observation_schema_version {version!r}; "
                 f"expected {OBSERVATION_SCHEMA_VERSION}"
             )
+        if observation.get("units") != "pu":
+            raise ValueError("Named observations must use units='pu'")
+        if observation.get("phase_power_base") != "total_network":
+            raise ValueError("Phase powers must use the total network base")
+        self.normalizer.check_base(observation.get("base", {}))
+        self.normalizer.require_pu(observation)
+        observation = self.normalizer.denormalize(observation)
         timestamp = pd.Timestamp(observation["timestamp"])
         if timestamp != self.case.index[0]:
             raise ValueError("Observation timestamp must match the first case timestamp")
@@ -267,6 +276,11 @@ class Teacher:
             self._solve_single_phase(settings)
             self._set_single_phase_actions()
         return self.case
+
+    def state_action(self):
+        """Return central X/Y in pu; the owned Case retains physical model units."""
+        state, action = self.case.state_action()
+        return self.normalizer.normalize(state), self.normalizer.normalize(action)
 
     def _solve_single_phase(self, settings: SolveConfig):
         solver = settings.solver

@@ -155,6 +155,13 @@ class ThreePhaseContractTest(unittest.TestCase):
             "pv": {},
         }
 
+        observation = teacher.normalizer.normalize(observation)
+        observation.update({
+            "observation_schema_version": 2, "units": "pu",
+            "base": teacher.normalizer.as_dict()["base"],
+            "phase_power_base": "total_network",
+        })
+
         solved = teacher.observe_dict(observation).solve()
         x, y = solved.state_action()
 

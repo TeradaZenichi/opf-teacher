@@ -7,7 +7,7 @@ import pandas as pd
 
 
 CASE_SCHEMA_VERSION = 1
-OBSERVATION_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 2
 
 VV_V = (0.90, 0.92, 0.98, 1.02, 1.08, 1.15)
 VV_Q = (1.0, 1.0, 0.0, 0.0, -1.0, -1.0)

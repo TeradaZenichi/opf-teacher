@@ -19,7 +19,18 @@
       "available_kw": "available_pu",
       "generation_kw": "generation_pu",
       "p_net_kw": "p_net_pu",
-      "q_injection_kvar": "q_injection_pu"
+      "q_injection_kvar": "q_injection_pu",
+      "grid_kw": "grid_p_pu",
+      "grid_kvar": "grid_q_pu",
+      "grid_import_kw": "grid_import_pu",
+      "grid_export_kw": "grid_export_pu",
+      "p_net_total_kw": "p_net_total_pu",
+      "generation_total_kw": "generation_total_pu",
+      "p_injection_total_kw": "p_injection_total_pu",
+      "q_injection_total_kvar": "q_injection_total_pu",
+      "curtailment_kw": "curtailment_pu",
+      "inverter_loss_kw": "inverter_loss_pu",
+      "grid_consumption_kw": "grid_consumption_pu"
     }
   },
   "time_encoding": {

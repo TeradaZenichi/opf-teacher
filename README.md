@@ -158,7 +158,7 @@ Without this section, the conventional filenames are used. The examples under
 `examples/` follow the same contract and remain self-contained.
 
 Case files use `"schema_version": 1`. Runtime observations use the independent
-`"observation_schema_version": 1` contract.
+`"observation_schema_version": 2` contract, with `units: "pu"` and explicit bases.
 
 Input units are kW, kVAr, kWh, ohm, and kV. Conversion to per unit is performed
 when the Pyomo model is built.
@@ -267,18 +267,18 @@ solved = teacher.observe(
     bess=bess_states,
     pv=pv_states,
 ).solve()
-x, y = solved.state_action()
+x, y = teacher.state_action()
 ```
 
 The named Gymnasium/OpenDSS observation can be consumed without a conversion
 layer:
 
 ```python
-_, reset_info = env.reset()
-solved = ThreePhaseTeacher(case_source).observe_dict(
-    reset_info["observation"]
-).solve()
-_, action = solved.state_action()
+observation, _ = env.reset()
+teacher = ThreePhaseTeacher(case_source)
+teacher.observe_dict(observation)
+teacher.solve()
+_, action = teacher.state_action()
 next_state, reward, terminated, truncated, info = env.step(action)
 ```
 
@@ -316,19 +316,20 @@ Observed states include the resulting SoC and previously applied device powers.
 Set `CASE_PATH` and `FORMULATION` together when selecting another scenario;
 the script also accepts SOCP and three-phase cases.
 
-`reset()` returns the initial named physical observation. Each `step(action)`
-executes the global physical action and returns the next named observation,
+`reset()` returns the initial named observation in pu. Each `step(action)`
+accepts the global action in pu and returns the next named observation in pu,
 ready for `teacher.observe_dict(observation)` at the next timestamp. `observe()`
 returns the same current snapshot without advancing time. At episode end,
 `step()` returns `None` for the next observation and sets `terminated=True`.
 `info["observation_before"]` records the observation used for the executed
 action; the other step measurements describe the executed snapshot.
 
-The observations keep voltage in pu and powers in kW/kvar. The training script
-selects the local/central view, converts powers to pu and encodes time before
-adding X/Y to the history. `PerUnitNormalizer.denormalize()` converts a predicted
-normalized action back to physical units before execution. The environment
-does not import the teacher or its preprocessing code.
+The environment and teacher use the same standalone `pu-normalizer` package.
+Their public observations, X/Y pairs and step power measurements use pu.
+Conversions to physical powers happen internally at the OPF/OpenDSS boundary.
+The training script only selects the local/central view and encodes time before
+adding X/Y to the history. Pass the teacher or NN action directly to `env.step()`.
+`env.normalizer.denormalize(info)` provides physical powers for reports when needed.
 
 The outputs are `results/train.csv` and `results/train.json`. The JSON records
 the scenario, formulation, observation mode, selected BESS/bus, window, phase order, number of pairs, bases and time
@@ -356,7 +357,7 @@ builds this view from the central pair, using the same global OPF label.
 The timestamp and phase order remain metadata; the training script encodes
 the time before adding the selected state to the history.
 
-Both modes solve the complete OPF and execute every device's physical action
+Both modes solve the complete OPF and execute every device's action
 in OpenDSS, including during warm-up. The selection changes only the exported
 pairs. Single-phase pairs use scalars, three-phase powers/voltages keep their
 phase keys, and each battery keeps one scalar SoC.
@@ -395,7 +396,7 @@ The timestamp string is row metadata. Each state in X contains numeric
 
 The training CSVs store powers in pu in both X and Y. Each CSV has a JSON with
 the same name containing the scenario, window, normalization bases and time encoding. Device
-commands sent to OpenDSS remain in kW/kvar. The result CSVs from `main.py`
+commands are converted internally to kW/kvar for OpenDSS. The result CSVs from `main.py`
 continue to use the physical units shown in their column names.
 
 `Teacher` uses the existing `Case`, `Bus`, `Bess`, `Pv`, and `Grid` objects.
@@ -407,30 +408,23 @@ trajectory. Grid exchange is a result, not a controllable device action.
 The integration/training repository supplies observations from its environment:
 
 ```python
-from teacher import Teacher
-from opf.single_phase import BusState, BessState, PvState
-from opf.single_phase.states import local_state_action
+from teacher import PairSelector, Teacher
 
 
-def label_horizon(case, bus_states, bess_states, pv_states):
+def label_horizon(case, observation, device_id):
     teacher = Teacher(case, formulation="single_phase_active")
-    teacher.observe(
-        buses=bus_states,       # {integer bus ID: BusState(...)}
-        bess=bess_states,       # {device ID: BessState(...)}
-        pv=pv_states,           # {device ID: PvState(...)}
-    )
+    teacher.observe_dict(observation)
     teacher.build()
     solved = teacher.solve()
 
-    central_x, central_y = solved.state_action()
-    local_pairs = {
-        "bess": {d.id: local_state_action(d, solved.buses[d.bus]) for d in solved.bess},
-        "pv": {d.id: local_state_action(d, solved.buses[d.bus]) for d in solved.pv},
-    }
-    return (central_x, central_y), local_pairs, solved.summary
+    central_x, central_y = teacher.state_action()
+    selector = PairSelector(case, "local", device_id)
+    local_pair = selector.select(central_x, central_y)
+    return (central_x, central_y), local_pair, solved.summary
 ```
 
-Observation constructors (scalar values for one instant):
+For direct access to the model, `observe()` also accepts state classes in
+physical units (scalar values for one instant in the single-phase case):
 
 - `BusState(v_before_pu, p_load_kw, q_load_kvar)`;
 - `BessState(soc_before_frac, previous_p_kw, previous_q_kvar)`;
@@ -459,13 +453,13 @@ solves retain the existing cyclic behavior. When observing a new SoC in a
 cyclic case, `observe()` preserves the original initial SoC as the terminal
 target. Set a new target explicitly when changing the terminal policy.
 
-`state_action()` returns named dictionaries, not normalized vectors:
+`Teacher.state_action()` returns named dictionaries in pu:
 
 - Central X: timestamp, dt, all buses, BESS/PV states and grid tariffs.
 - Central Y: BESS and PV action dictionaries keyed by device ID.
 - Local X: only the connected bus state and the device's own state.
-- Local Y: `p_net_kw`/`q_injection_kvar` for BESS, or
-  `generation_kw`/`q_injection_kvar` for PV. PV generation is positive;
+- Local Y selected by `PairSelector`: `p_net_pu`/`q_injection_pu` for BESS.
+  Central PV actions use `generation_pu`/`q_injection_pu`. PV generation is positive;
   nighttime grid consumption is calculated separately by the environment.
 
 Local pairs intentionally exclude tariffs, forecasts and other devices.
@@ -473,8 +467,8 @@ The training repository may add information available to its controller,
 including time, terminal targets and forecast windows. These extra features
 are especially relevant to reproduce a teacher that sees the full horizon.
 It also owns vector ordering and any statistical preprocessing used by its
-learning model. The per-unit conversion below is available for central and
-local pairs. Local labels remain actions from a global optimization, not a
+learning model. Both central and local pairs already use pu. Local labels
+remain actions from a global optimization, not a
 separately optimized local policy.
 
 Only optimal/locally optimal solver terminations produce actions. This first
@@ -483,8 +477,8 @@ use the returned summary and an OpenDSS replay to accept training labels.
 
 ## Per-unit training pairs
 
-`normalization.PerUnitNormalizer` takes `case.base`, loaded from the `base`
-object in `config.json`:
+`PUNormalizer` takes `s_base_kva` and `v_base_kv`, loaded from the `base`
+object in `config.json`. Both repositories import the same lightweight package:
 
 ```json
 "base": {
@@ -508,19 +502,18 @@ angles and tariffs also keep their original units. Currents are not part of
 the current observation contract.
 
 ```python
-from normalization import PerUnitNormalizer, TimeEncoder
+from pu_normalizer import PUNormalizer
+from normalization import TimeEncoder
 
-normalizer = PerUnitNormalizer(case.base)
+normalizer = PUNormalizer(case.base.s_base_kva, case.base.v_base_kv)
 time_encoder = TimeEncoder()
-state, action = solved.state_action()
-normalized_state = normalizer.normalize(state)
-normalized_state["time"] = time_encoder.encode(normalized_state.pop("timestamp"))
-normalized_action = normalizer.normalize(action)
-pair = history.append(normalized_state, normalized_action)
-env.step(action)
+state, action = teacher.state_action()  # Already in pu.
+state["time"] = time_encoder.encode(state.pop("timestamp"))
+pair = history.append(state, action)
+observation, reward, terminated, truncated, info = env.step(action)
 
-# Convert a predicted normalized action before executing it.
-physical_action = normalizer.denormalize(normalized_action)
+# Optional physical powers for inspection or reporting.
+physical_info = normalizer.denormalize(info)
 ```
 
 The conversion creates independent copies and renames power fields:
@@ -535,8 +528,11 @@ The conversion creates independent copies and renames power fields:
 `normalize()` and `denormalize()` support the scalar single-phase and
 phase-indexed three-phase dictionaries, including local pairs. They use fixed
 bases for every position in the temporal window and do not fit dataset
-statistics. The OPF's state, actions and results remain in their existing units.
+statistics. The internal `Case` and its typed states/results retain explicit
+physical field names; `Case.state_action()` is the physical model interface.
+Use `Teacher.state_action()` for exchange with the environment and NN.
 `normalizer.as_dict()` provides JSON-serializable normalization metadata.
+`PerUnitNormalizer(case.base)` remains only as a compatibility constructor.
 
 ## Timestamp features for neural networks
 
@@ -561,7 +557,7 @@ is a fixed transformation and has no learned parameters or training step.
 
 The training scripts replace each state's timestamp string with these features
 before adding it to `StateActionHistory`. The original timestamp remains in
-the row metadata, and the physical teacher observation keeps its timestamp.
+the row metadata, and the named teacher observation keeps its timestamp.
 Select the `x.*` numeric columns as the network inputs and `y.*` as the targets.
 
 The same encoder is available for single-phase, three-phase and local states.
@@ -620,13 +616,12 @@ window one; the action target always belongs to the current step.
 
 ```python
 from teacher import StateActionHistory
-from opf.single_phase.states import local_state_action
 
 history = StateActionHistory(window=3)  # Omit window for a single-state pair.
 
 # At each observed step, after solving the corresponding horizon:
-state, action = case.state_action()
-# For a single-phase local pair: local_state_action(battery, case.buses[battery.bus])
+state, action = teacher.state_action()
+# Optionally select a local pair with PairSelector before appending.
 pair = history.append(state, action)
 if pair is not None:
     states, current_action = pair
@@ -641,7 +636,7 @@ copies. The caller supplies observations in chronological order at the chosen
 sampling interval; the class does not check timestamps or advance the environment.
 Do not fill the window with the OPF's predicted future trajectory.
 
-`case.state_action()` still returns a single `(state, action)` pair.
+`teacher.state_action()` returns a single `(state, action)` pair in pu.
 `TemporalTeacher` remains as a compatibility name with its previous default
 `window=3`. New code should use `StateActionHistory`, whose default is one.
 

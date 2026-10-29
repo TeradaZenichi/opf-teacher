@@ -3,6 +3,11 @@
 The `opf.three_phase` package is independent from the existing single-phase
 equivalent formulations. It defines the data read by the AC-IVR model.
 
+These model classes retain explicitly named physical fields. The exchanged
+observations and `Teacher.state_action()` use pu through the shared
+`PUNormalizer`. Every phase uses the total network power base, and battery SoC
+remains one fraction per device. See the README for the runtime observation schema.
+
 ## Phase names
 
 Public data uses `a`, `b`, and `c`. OpenDSS nodes `1`, `2`, and `3` are accepted

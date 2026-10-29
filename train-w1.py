@@ -6,7 +6,7 @@ import pandas as pd
 from opendss_env import EnvironmentConfig, MicrogridEnv
 
 from opf.single_phase import load_case
-from normalization import PerUnitNormalizer, TimeEncoder
+from normalization import PUNormalizer, TimeEncoder
 from teacher import StateActionHistory, Teacher
 
 
@@ -20,7 +20,7 @@ WINDOW = 1  # Number of observed states in each X.
 
 def main():
     original_case = load_case(CASE_PATH)
-    normalizer = PerUnitNormalizer(original_case.base)
+    normalizer = PUNormalizer(original_case.base.s_base_kva, original_case.base.v_base_kv)
     time_encoder = TimeEncoder()
     history = StateActionHistory(window=WINDOW)
     env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods))
@@ -32,11 +32,9 @@ def main():
         teacher.observe_dict(observation)
         teacher.build()
         solved = teacher.solve()
-        state, action = solved.state_action()
-        normalized_state = normalizer.normalize(state)
-        normalized_state["time"] = time_encoder.encode(normalized_state.pop("timestamp"))
-        normalized_action = normalizer.normalize(action)
-        pair = history.append(normalized_state, normalized_action)
+        state, action = teacher.state_action()
+        state["time"] = time_encoder.encode(state.pop("timestamp"))
+        pair = history.append(state, action)
         observation, _, terminated, truncated, _ = env.step(action)
 
         if pair is not None:
@@ -44,7 +42,7 @@ def main():
             state_history = {}
             for position, observed_state in enumerate(states):
                 state_history[str(position)] = observed_state
-            rows.append({"timestamp": state["timestamp"], "x": state_history, "y": current_action})
+            rows.append({"timestamp": solved.index[0].isoformat(), "x": state_history, "y": current_action})
         if terminated or truncated:
             break
     env.close()

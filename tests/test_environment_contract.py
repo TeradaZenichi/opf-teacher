@@ -1,6 +1,6 @@
 import unittest
 
-from normalization import PerUnitNormalizer, TimeEncoder
+from normalization import PUNormalizer, TimeEncoder
 from teacher import PairSelector, Teacher
 
 try:
@@ -21,26 +21,28 @@ class EnvironmentContractTest(unittest.TestCase):
                 original = Teacher(source, formulation=formulation).case.horizon(0, periods=2)
                 env = MicrogridEnv(EnvironmentConfig(source, original.n_periods))
                 observation, _ = env.reset()
-                normalizer = PerUnitNormalizer(original.base)
+                normalizer = PUNormalizer(original.base.s_base_kva, original.base.v_base_kv)
+                self.assertIs(type(normalizer), type(env.normalizer))
+                self.assertEqual(observation["units"], "pu")
                 encoder = TimeEncoder()
                 for step in original.periods:
                     before = observation
                     teacher = Teacher(original.horizon(step), formulation=formulation)
                     teacher.observe_dict(before)
                     solved = teacher.solve()
-                    state, action = solved.state_action()
+                    state, action = teacher.state_action()
                     self.assertEqual(state["timestamp"], before["timestamp"])
                     for mode in ("central", "local"):
                         selected_state, selected_action = PairSelector(original, mode, "b1").select(state, action)
-                        features = normalizer.normalize(selected_state)
+                        features = selected_state
                         features["time"] = encoder.encode(features.pop("timestamp"))
                         self.assertEqual(features["time"], encoder.encode(before["timestamp"]))
                         soc = features["bess"]["b1"]["soc_before_frac"] if mode == "central" else features["device"]["soc_before_frac"]
                         self.assertEqual(soc, before["bess"]["b1"]["soc_before_frac"])
-                        target = normalizer.normalize(selected_action)
+                        target = selected_action
                         physical = normalizer.denormalize(target)
                         requested = physical["bess"]["b1"] if mode == "central" else physical
-                        expected = action["bess"]["b1"]["p_net_kw"]
+                        expected = solved.bess[0].action.p_net_kw
                         if isinstance(expected, dict):
                             for phase, value in expected.items():
                                 self.assertAlmostEqual(requested["p_net_kw"][phase], value)

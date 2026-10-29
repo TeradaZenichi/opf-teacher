@@ -25,6 +25,32 @@ def observations(case, soc=0.7):
 
 
 class TeacherTest(unittest.TestCase):
+    def test_public_pairs_are_pu_and_owned_model_results_keep_explicit_units(self):
+        self.teacher.observe(**observations(self.case))
+        solved = self.teacher.solve()
+        state, action = self.teacher.state_action()
+        self.teacher.normalizer.require_pu(state)
+        self.teacher.normalizer.require_pu(action)
+        self.assertNotIn("p_net_kw", action["bess"]["b1"])
+        expected = solved.bess[0].action.p_net_kw
+        self.assertAlmostEqual(action["bess"]["b1"]["p_net_pu"], expected / solved.base.s_base_kva)
+        physical = self.teacher.normalizer.denormalize(action)
+        self.assertAlmostEqual(physical["bess"]["b1"]["p_net_kw"], expected)
+        self.assertEqual(state["bess"]["b1"]["soc_before_frac"], 0.7)
+
+    def test_named_observations_require_pu_and_matching_bases(self):
+        valid = {
+            "observation_schema_version": 2, "units": "pu",
+            "phase_power_base": "total_network",
+            "base": self.teacher.normalizer.as_dict()["base"],
+        }
+        with self.assertRaisesRegex(ValueError, "units"):
+            self.teacher.observe_dict({**valid, "units": "physical"})
+        with self.assertRaisesRegex(ValueError, "s_base_kva"):
+            self.teacher.observe_dict({**valid, "base": {"s_base_kva": 2000.0, "v_base_kv": 11.0}})
+        with self.assertRaisesRegex(ValueError, "physical field"):
+            self.teacher.observe_dict({**valid, "bess": {"b1": {"previous_p_kw": -20.0}}})
+
     def test_horizon_preserves_source_and_aligns_all_profiles(self):
         original = load_case("examples/case5")
         original.summary = object()
@@ -159,6 +185,13 @@ class TeacherTest(unittest.TestCase):
             },
         }
 
+        observation = self.teacher.normalizer.normalize(observation)
+        observation.update({
+            "observation_schema_version": 2, "units": "pu",
+            "base": self.teacher.normalizer.as_dict()["base"],
+            "phase_power_base": "total_network",
+        })
+
         solved = self.teacher.observe_dict(observation).solve()
         x, _ = solved.state_action()
 
@@ -167,7 +200,7 @@ class TeacherTest(unittest.TestCase):
 
     def test_named_observation_version_is_required(self):
         with self.assertRaisesRegex(ValueError, "observation_schema_version"):
-            self.teacher.observe_dict({"observation_schema_version": 2})
+            self.teacher.observe_dict({"observation_schema_version": 1})
 
     def test_multiple_devices_and_local_bus_validation(self):
         extra = deepcopy(self.case.bess[0])

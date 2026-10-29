@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from opendss_env import EnvironmentConfig, MicrogridEnv
 
-from normalization import PerUnitNormalizer, TimeEncoder
+from normalization import PUNormalizer, TimeEncoder
 from teacher import PairSelector, StateActionHistory, Teacher
 
 
@@ -29,7 +29,7 @@ def main(window=WINDOW):
     history = StateActionHistory(window=window)
     original_case = Teacher(CASE_PATH, formulation=FORMULATION).case
     selector = PairSelector(original_case, OBSERVATION_MODE, DEVICE_ID)
-    normalizer = PerUnitNormalizer(original_case.base)
+    normalizer = PUNormalizer(original_case.base.s_base_kva, original_case.base.v_base_kv)
     time_encoder = TimeEncoder()
     env = MicrogridEnv(EnvironmentConfig(CASE_PATH, original_case.n_periods))
     rows = []
@@ -39,14 +39,12 @@ def main(window=WINDOW):
         teacher = Teacher(horizon, formulation=FORMULATION)
         teacher.observe_dict(observation)
         teacher.build()
-        solved = teacher.solve()
-        state, action = solved.state_action()
+        teacher.solve()
+        state, action = teacher.state_action()
         selected_state, selected_action = selector.select(state, action)
-        normalized_state = normalizer.normalize(selected_state)
-        normalized_state["time"] = time_encoder.encode(normalized_state.pop("timestamp"))
-        normalized_state.pop("phase_order", None)
-        normalized_action = normalizer.normalize(selected_action)
-        pair = history.append(normalized_state, normalized_action)
+        selected_state["time"] = time_encoder.encode(selected_state.pop("timestamp"))
+        selected_state.pop("phase_order", None)
+        pair = history.append(selected_state, selected_action)
         observation, _, terminated, truncated, _ = env.step(action)
 
         if pair is not None:
