@@ -1,12 +1,8 @@
 """Single-phase local Volt-VAr and Volt-Watt controls."""
 import pyomo.environ as pyo
 
-VV_V = (0.90, 0.92, 0.98, 1.02, 1.08, 1.15)
-VV_Q = (1.0, 1.0, 0.0, 0.0, -1.0, -1.0)
-VW_V = (0.90, 1.06, 1.10, 1.15)
-VW_P = (1.0, 1.0, 0.0, 0.0)
-QMAX_FRAC = 0.44
-V_MAX_EMERG = 1.10
+from opf.common import QMAX_FRAC, VV_V, VV_Q, VW_V, VW_P, V_MAX_EMERG
+
 
 MODES = ("volt-var", "volt-watt", "volt-var-watt")
 
@@ -23,43 +19,86 @@ def ppv_bounds(avail):
     return (0.0, avail)
 
 
-def add(m, pv, pv_ctrl, pv_s, pv_avail, T):
-    var_ids = [g for g in pv if "var" in pv_ctrl[g]]
-    watt_ids = [g for g in pv if "watt" in pv_ctrl[g]]
-    if not (var_ids or watt_ids):
-        return
+class VoltageCurve:
+    """Piecewise voltage curve represented by convex weights and an SOS2 set."""
 
-    pure_watt = [(g, t) for g in pv if pv_ctrl[g] == "volt-watt" for t in T]
-    if pure_watt:
-        m.vw_noq_idx = pyo.Set(initialize=pure_watt, dimen=2)
-        m.vw_noq = pyo.Constraint(m.vw_noq_idx, rule=lambda m, g, t: m.qpv[g, t] == 0.0)
+    def __init__(self, pv_ids, periods, voltages):
+        self.voltage_squared = [voltage ** 2 for voltage in voltages]
+        self.indices = pyo.Set(initialize=[(pv_id, time) for pv_id in pv_ids for time in periods], dimen=2)
+        self.points = pyo.Set(initialize=range(len(voltages)))
+        self.weights = pyo.Var(self.indices, self.points, domain=pyo.NonNegativeReals)
+        self.weight_sum = pyo.Constraint(self.indices, rule=self.weight_sum_rule)
+        self.voltage_link = pyo.Constraint(self.indices, rule=self.voltage_link_rule)
+        self.adjacent_weights = pyo.SOSConstraint(self.indices, rule=self.adjacent_weights_rule, sos=2)
 
-    m.vloc = pyo.Var(m.G, m.T)
-    m.vloc_link = pyo.Constraint(m.G, m.T, rule=lambda m, g, t: m.vloc[g, t] == m.v[pv[g].bus, t])
+    def weight_sum_rule(self, model, pv_id, time):
+        return sum(self.weights[pv_id, time, point] for point in self.points) == 1
 
-    def _pwl(name, ids, v_pts):
-        xk = [V * V for V in v_pts]
-        K = list(range(len(xk)))
-        S = pyo.Set(initialize=[(g, t) for g in ids for t in T], dimen=2)
-        KS = pyo.Set(initialize=K)
-        lam = pyo.Var(S, KS, domain=pyo.NonNegativeReals)
-        setattr(m, f"{name}_idx", S)
-        setattr(m, f"{name}_k", KS)
-        setattr(m, f"{name}_lam", lam)
-        setattr(m, f"{name}_sum", pyo.Constraint(S, rule=lambda m, g, t: sum(lam[g, t, k] for k in K) == 1))
-        setattr(m, f"{name}_x", pyo.Constraint(
-            S, rule=lambda m, g, t: m.vloc[g, t] == sum(lam[g, t, k] * xk[k] for k in K)))
-        setattr(m, f"{name}_sos", pyo.SOSConstraint(S, rule=lambda m, g, t: [lam[g, t, k] for k in K], sos=2))
-        return S, lam, K
+    def voltage_link_rule(self, model, pv_id, time):
+        return model.vloc[pv_id, time] == sum(
+            self.weights[pv_id, time, point] * self.voltage_squared[point] for point in self.points
+        )
 
-    if var_ids:
-        S, lam, K = _pwl("vv", var_ids, VV_V)
-        m.volt_var = pyo.Constraint(
-            S, rule=lambda m, g, t: m.qpv[g, t]
-            == sum(lam[g, t, k] * (QMAX_FRAC * pv_s[g] * VV_Q[k]) for k in K))
+    def adjacent_weights_rule(self, model, pv_id, time):
+        return [self.weights[pv_id, time, point] for point in self.points]
 
-    if watt_ids:
-        S, lam, K = _pwl("vw", watt_ids, VW_V)
-        m.volt_watt = pyo.Constraint(
-            S, rule=lambda m, g, t: m.ppv[g, t]
-            <= sum(lam[g, t, k] * (VW_P[k] * pv_avail[g][t]) for k in K))
+
+class PvDroopControl:
+    """Add local Volt-VAr and Volt-Watt equations from PV components."""
+
+    def __init__(self, case):
+        self.case = case
+        self.pv = {pv.id: pv for pv in case.pv}
+
+    def add_to(self, model):
+        var_ids = [pv.id for pv in self.pv.values() if "var" in pv.control]
+        watt_ids = [pv.id for pv in self.pv.values() if "watt" in pv.control]
+        if not (var_ids or watt_ids):
+            return
+        pure_watt = [(pv.id, time) for pv in self.pv.values()
+                     if pv.control == "volt-watt" for time in model.T]
+        if pure_watt:
+            model.vw_noq_idx = pyo.Set(initialize=pure_watt, dimen=2)
+            model.vw_noq = pyo.Constraint(model.vw_noq_idx, rule=self.no_reactive_power_rule)
+        model.vloc = pyo.Var(model.G, model.T)
+        model.vloc_link = pyo.Constraint(model.G, model.T, rule=self.local_voltage_rule)
+
+        if var_ids:
+            curve = VoltageCurve(var_ids, model.T, VV_V)
+            model.vv_idx = curve.indices
+            model.vv_k = curve.points
+            model.vv_lam = curve.weights
+            model.vv_sum = curve.weight_sum
+            model.vv_x = curve.voltage_link
+            model.vv_sos = curve.adjacent_weights
+            model.volt_var = pyo.Constraint(model.vv_idx, rule=self.volt_var_rule)
+        if watt_ids:
+            curve = VoltageCurve(watt_ids, model.T, VW_V)
+            model.vw_idx = curve.indices
+            model.vw_k = curve.points
+            model.vw_lam = curve.weights
+            model.vw_sum = curve.weight_sum
+            model.vw_x = curve.voltage_link
+            model.vw_sos = curve.adjacent_weights
+            model.volt_watt = pyo.Constraint(model.vw_idx, rule=self.volt_watt_rule)
+
+    def no_reactive_power_rule(self, model, pv_id, time):
+        return model.qpv[pv_id, time] == 0.0
+
+    def local_voltage_rule(self, model, pv_id, time):
+        pv = self.pv[pv_id]
+        return model.vloc[pv_id, time] == model.v[pv.bus, time]
+
+    def volt_var_rule(self, model, pv_id, time):
+        pv = self.pv[pv_id]
+        rating = self.case.base.pu_power(pv.s_max_kva)
+        return model.qpv[pv_id, time] == sum(
+            model.vv_lam[pv_id, time, point] * (QMAX_FRAC * rating * VV_Q[point]) for point in model.vv_k
+        )
+
+    def volt_watt_rule(self, model, pv_id, time):
+        pv = self.pv[pv_id]
+        available = self.case.base.pu_power(float(pv.avail_kw.iloc[time]))
+        return model.ppv[pv_id, time] <= sum(
+            model.vw_lam[pv_id, time, point] * (VW_P[point] * available) for point in model.vw_k
+        )

@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from opf.three_phase.export import write_result_csvs
-from teacher import Teacher
+from teacher import SolveConfig, ThreePhaseTeacher
 
 
 def main():
@@ -22,11 +22,10 @@ def main():
     parser.add_argument("--tee", action="store_true")
     args = parser.parse_args()
 
-    solved = Teacher(args.case, formulation="three_phase_ivr").solve(
-        solver="scipy_slsqp",
-        tee=args.tee,
-        maxiter=args.maxiter,
-    )
+    teacher = ThreePhaseTeacher(args.case)
+    teacher.build()
+    settings = SolveConfig(tee=args.tee, maxiter=args.maxiter)
+    solved = teacher.solve(config=settings)
     paths = write_result_csvs(solved, args.output)
     print(solved.summary.as_dict())
     print(solved.quality)

@@ -1,0 +1,46 @@
+{
+  "case": "case5_local",
+  "formulation": "single_phase_active",
+  "observation": {
+    "mode": "central",
+    "device_type": null,
+    "device_id": null,
+    "bus_id": null
+  },
+  "window": 3,
+  "periods": 24,
+  "pairs": 22,
+  "phase_order": [
+    "a"
+  ],
+  "normalization": {
+    "schema_version": 1,
+    "method": "per_unit",
+    "base": {
+      "s_base_kva": 1000.0,
+      "v_base_kv": 11.0
+    },
+    "phase_power_base": "total_network",
+    "voltage": "already_pu",
+    "clipping": false,
+    "power_fields": {
+      "p_load_kw": "p_load_pu",
+      "q_load_kvar": "q_load_pu",
+      "previous_p_kw": "previous_p_pu",
+      "previous_q_kvar": "previous_q_pu",
+      "available_kw": "available_pu",
+      "generation_kw": "generation_pu",
+      "p_net_kw": "p_net_pu",
+      "q_injection_kvar": "q_injection_pu"
+    }
+  },
+  "time_encoding": {
+    "method": "sine_cosine",
+    "period_hours": 24,
+    "clock": "timestamp_local",
+    "features": [
+      "hour_sin",
+      "hour_cos"
+    ]
+  }
+}

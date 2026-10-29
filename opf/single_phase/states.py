@@ -42,7 +42,40 @@ class PvAction:
 def state_values(state):
     if state is None:
         raise ValueError("Missing pre-action observation; call Teacher.observe first")
-    return dict(vars(state))
+    if isinstance(state, BusState):
+        return {
+            "v_before_pu": state.v_before_pu,
+            "p_load_kw": state.p_load_kw,
+            "q_load_kvar": state.q_load_kvar,
+        }
+    if isinstance(state, BessState):
+        return {
+            "soc_before_frac": state.soc_before_frac,
+            "previous_p_kw": state.previous_p_kw,
+            "previous_q_kvar": state.previous_q_kvar,
+        }
+    if isinstance(state, PvState):
+        return {
+            "available_kw": state.available_kw,
+            "previous_p_kw": state.previous_p_kw,
+            "previous_q_kvar": state.previous_q_kvar,
+        }
+    if isinstance(state, GridState):
+        return {
+            "buy_price_per_kwh": state.buy_price_per_kwh,
+            "sell_price_per_kwh": state.sell_price_per_kwh,
+        }
+    if isinstance(state, BessAction):
+        return {
+            "p_net_kw": state.p_net_kw,
+            "q_injection_kvar": state.q_injection_kvar,
+        }
+    if isinstance(state, PvAction):
+        return {
+            "generation_kw": state.generation_kw,
+            "q_injection_kvar": state.q_injection_kvar,
+        }
+    raise TypeError("Unsupported state or action type")
 
 
 def local_state_action(device, bus):
@@ -51,4 +84,4 @@ def local_state_action(device, bus):
     if device.action is None:
         raise ValueError("No teacher action; solve the observed case first")
     x = {"bus": state_values(bus.state), "device": state_values(device.state)}
-    return x, dict(vars(device.action))
+    return x, state_values(device.action)

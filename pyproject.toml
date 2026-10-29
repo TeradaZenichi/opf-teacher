@@ -16,12 +16,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+environment = [
+    "powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@6ce5d203ee4d92fa5d5c9dc33b6206dfe9d6d0d8",
+]
+
 highs = ["highspy>=1.15,<2"]
 gurobi = ["gurobipy>=13,<14"]
 plot = ["matplotlib>=3.10,<4"]
 
 [tool.setuptools]
-py-modules = ["teacher"]
+py-modules = ["teacher", "normalization"]
 
 [tool.setuptools.packages.find]
 include = ["opf*"]

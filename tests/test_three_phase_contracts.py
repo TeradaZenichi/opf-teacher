@@ -2,9 +2,10 @@ import unittest
 
 import pandas as pd
 
-from opf.components import Base, Bess, Pv
+from opf.common import Base, Bess, Pv
 from opf.three_phase import (
     BessAction,
+    BessState,
     Branch,
     Bus,
     BusState,
@@ -19,6 +20,19 @@ from teacher import Teacher, ThreePhaseTeacher
 
 
 class ThreePhaseContractTest(unittest.TestCase):
+    def test_bess_soc_is_one_fraction_shared_by_all_phases(self):
+        active = {"a": -1.0, "b": 0.0, "c": 1.0}
+        reactive = {"a": 0.0, "b": 1.0, "c": -1.0}
+        for soc in (0.0, 0.4, 1.0):
+            with self.subTest(soc=soc):
+                state = BessState(soc, active, reactive)
+                self.assertIsInstance(state.soc_before_frac, float)
+                self.assertEqual(state.soc_before_frac, soc)
+                self.assertEqual(state.phases, ("a", "b", "c"))
+        for soc in (-0.1, 1.1, float("nan"), float("inf")):
+            with self.subTest(soc=soc), self.assertRaises(ValueError):
+                BessState(soc, active, reactive)
+
     def setUp(self):
         self.index = pd.date_range("2026-01-01", periods=2, freq="h")
 
@@ -99,6 +113,16 @@ class ThreePhaseContractTest(unittest.TestCase):
         self.assertEqual(solved.summary.status, "locally_optimal")
         self.assertLess(solved.quality["max_power_flow_residual_a"], 1e-6)
         self.assertLess(solved.buses[2].result.v_pu["c"].iloc[0], 1.0)
+
+    def test_three_phase_teacher_keeps_the_input_case_independent(self):
+        original = self.valid_case()
+        teacher = ThreePhaseTeacher(original)
+        teacher.case.buses[2].p_load_kw["a"].iloc[0] = 1.5
+        solved = teacher.solve()
+        self.assertIs(solved, teacher.case)
+        self.assertEqual(original.buses[2].p_load_kw["a"].iloc[0], 1.0)
+        self.assertIsNone(original.buses[2].result)
+        self.assertIsNone(original.summary)
 
     def test_three_phase_teacher_uses_phase_native_pre_action_observation(self):
         case = self.valid_case()

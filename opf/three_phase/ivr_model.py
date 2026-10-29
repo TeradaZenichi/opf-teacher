@@ -1,15 +1,13 @@
 """Unbalanced three-phase AC optimization."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
-import pandas as pd
 from scipy.optimize import linprog, minimize
 
-from opf.components import Summary
-from opf.single_phase.pv_droop import (
+from opf.common import (
     QMAX_FRAC,
     VV_Q,
     VV_V,
@@ -17,13 +15,7 @@ from opf.single_phase.pv_droop import (
     VW_V,
 )
 from opf.three_phase.components import Case
-from opf.three_phase.results import (
-    BessResult,
-    BranchResult,
-    BusResult,
-    GridResult,
-    PvResult,
-)
+from opf.three_phase.results import attach_results
 
 
 @dataclass
@@ -61,7 +53,45 @@ class Dispatch:
     q_pv_phase: np.ndarray
 
     def copy(self):
-        return Dispatch(**{name: values.copy() for name, values in vars(self).items()})
+        return Dispatch(
+            p_charge=self.p_charge.copy(),
+            p_discharge=self.p_discharge.copy(),
+            q_bess=self.q_bess.copy(),
+            p_pv=self.p_pv.copy(),
+            q_pv=self.q_pv.copy(),
+            p_charge_phase=self.p_charge_phase.copy(),
+            p_discharge_phase=self.p_discharge_phase.copy(),
+            q_bess_phase=self.q_bess_phase.copy(),
+            p_pv_phase=self.p_pv_phase.copy(),
+            q_pv_phase=self.q_pv_phase.copy(),
+        )
+
+
+@dataclass
+class DispatchEvaluation:
+    """Physical trajectories and cost calculated for one candidate dispatch."""
+
+    objective: float
+    voltages: list[np.ndarray]
+    currents: list[list[np.ndarray]]
+    grid_power: list[np.ndarray]
+    soc: np.ndarray
+    dispatch: Dispatch
+    residual: float
+
+
+@dataclass
+class DecisionVariables:
+    """Order, bounds and initial values passed to SciPy."""
+
+    layout: list = field(default_factory=list)
+    bounds: list = field(default_factory=list)
+    initial: list = field(default_factory=list)
+
+    def add(self, name, indices, lower, upper, initial):
+        self.layout.append((name, tuple(indices)))
+        self.bounds.append((float(lower), float(upper)))
+        self.initial.append(float(np.clip(initial, lower, upper)))
 
 
 class IVRModel:
@@ -72,6 +102,8 @@ class IVRModel:
             raise TypeError("three_phase_ivr requires an opf.three_phase.Case")
         self.case = case
         self.solution: IVRSolution | None = None
+        self._last_dispatch_key: bytes | None = None
+        self._last_evaluation: DispatchEvaluation | None = None
         self._prepare_network()
 
     def _prepare_network(self):
@@ -201,7 +233,6 @@ class IVRModel:
 
     def solve(self, *, tee=False, maxiter=300, ftol=1e-8) -> Case:
         case = self.case
-        periods = case.n_periods
         supported_controls = {
             "optimal", "fixed_pf", "volt-var", "volt-watt", "volt-var-watt"
         }
@@ -213,71 +244,29 @@ class IVRModel:
 
         bounds, x0 = self._decision_bounds_and_start()
 
-        cache = {"key": None, "value": None}
-
-        def evaluate(values):
-            key = np.asarray(values, dtype=float).tobytes()
-            if cache["key"] == key:
-                return cache["value"]
-            dispatch = self._unpack_dispatch(values)
-            voltages = []
-            branch_currents = []
-            grid_power = []
-            max_residual = 0.0
-            previous_voltage = self.nominal_voltage
-            for time in range(periods):
-                consumption = self._net_consumption_kva(time, dispatch)
-                voltage, currents, source_power, residual = self._power_flow(
-                    consumption, previous_voltage
-                )
-                previous_voltage = voltage
-                voltages.append(voltage)
-                branch_currents.append(currents)
-                grid_power.append(source_power)
-                max_residual = max(max_residual, residual)
-
-            total_grid_kw = np.asarray([power.real.sum() for power in grid_power])
-            imported = np.maximum(total_grid_kw, 0.0)
-            exported = np.maximum(-total_grid_kw, 0.0)
-            objective = case.dt_h * np.sum(
-                case.price.to_numpy()
-                * (imported - case.grid.feed_in_ratio * exported)
-            )
-            objective += 1e-8 * case.dt_h * np.sum(
-                dispatch.p_charge + dispatch.p_discharge
-            )
-            soc = self._soc_trajectory(dispatch)
-            value = {
-                "objective": float(objective),
-                "voltages": voltages,
-                "currents": branch_currents,
-                "grid_power": grid_power,
-                "soc": soc,
-                "dispatch": dispatch,
-                "residual": max_residual,
-            }
-            cache["key"], cache["value"] = key, value
-            return value
+        self.solution = None
+        self._last_dispatch_key = None
+        self._last_evaluation = None
 
         constraints = []
         if self._has_device_equalities():
             constraints.append({
                 "type": "eq",
-                "fun": lambda values: self._device_equalities(values, evaluate(values)),
+                "fun": lambda values: self._device_equalities(values, self._evaluate_dispatch(values)),
             })
         if case.bess or case.pv:
             constraints.append({
                 "type": "ineq",
-                "fun": lambda values: self._device_margins(values, evaluate(values)),
+                "fun": lambda values: self._device_margins(values, self._evaluate_dispatch(values)),
             })
         constraints.append({
             "type": "ineq",
-            "fun": lambda values: self._network_margins(evaluate(values)),
+            "fun": lambda values: self._network_margins(self._evaluate_dispatch(values)),
         })
 
         if x0.size:
             optimized = minimize(
-                lambda values: evaluate(values)["objective"],
+                lambda values: self._evaluate_dispatch(values).objective,
                 x0,
                 method="SLSQP",
                 bounds=bounds,
@@ -290,33 +279,81 @@ class IVRModel:
             iterations = int(optimized.nit)
         else:
             values = x0
-            margins = self._network_margins(evaluate(values))
+            margins = self._network_margins(self._evaluate_dispatch(values))
             if margins.size and float(np.min(margins)) < -1e-7:
                 raise RuntimeError("Fixed three-phase dispatch violates network limits")
             iterations = 0
 
-        evaluated = evaluate(values)
+        evaluated = self._evaluate_dispatch(values)
         dispatch = self._unpack_dispatch(values)
         self.solution = IVRSolution(
-            voltages_kv=evaluated["voltages"],
-            branch_currents_ka=evaluated["currents"],
-            grid_power_kva=evaluated["grid_power"],
+            voltages_kv=evaluated.voltages,
+            branch_currents_ka=evaluated.currents,
+            grid_power_kva=evaluated.grid_power,
             p_charge_kw=dispatch.p_charge,
             p_discharge_kw=dispatch.p_discharge,
             q_bess_kvar=dispatch.q_bess,
             p_charge_phase_kw=dispatch.p_charge_phase,
             p_discharge_phase_kw=dispatch.p_discharge_phase,
             q_bess_phase_kvar=dispatch.q_bess_phase,
-            soc_kwh=evaluated["soc"],
+            soc_kwh=evaluated.soc,
             pv_generation_kw=dispatch.p_pv,
             q_pv_kvar=dispatch.q_pv,
             pv_generation_phase_kw=dispatch.p_pv_phase,
             q_pv_phase_kvar=dispatch.q_pv_phase,
-            objective_cost=evaluated["objective"],
+            objective_cost=evaluated.objective,
             iterations=iterations,
-            max_power_flow_residual_a=evaluated["residual"] * 1000.0,
+            max_power_flow_residual_a=evaluated.residual * 1000.0,
         )
         return attach_results(self, case)
+
+    def _evaluate_dispatch(self, values) -> DispatchEvaluation:
+        """Evaluate network physics and cost for one candidate dispatch."""
+        case = self.case
+        key = np.asarray(values, dtype=float).tobytes()
+        if self._last_dispatch_key == key and self._last_evaluation is not None:
+            return self._last_evaluation
+        dispatch = self._unpack_dispatch(values)
+        voltages = []
+        branch_currents = []
+        grid_power = []
+        max_residual = 0.0
+        previous_voltage = self.nominal_voltage
+        for time in range(case.n_periods):
+            consumption = self._net_consumption_kva(time, dispatch)
+            voltage, currents, source_power, residual = self._power_flow(
+                consumption, previous_voltage
+            )
+            previous_voltage = voltage
+            voltages.append(voltage)
+            branch_currents.append(currents)
+            grid_power.append(source_power)
+            max_residual = max(max_residual, residual)
+
+        total_grid_kw = np.asarray([power.real.sum() for power in grid_power])
+        imported = np.maximum(total_grid_kw, 0.0)
+        exported = np.maximum(-total_grid_kw, 0.0)
+        objective = case.dt_h * np.sum(
+            case.price.to_numpy()
+            * (imported - case.grid.feed_in_ratio * exported)
+        )
+        objective += 1e-8 * case.dt_h * np.sum(
+            dispatch.p_charge + dispatch.p_discharge
+        )
+        soc = self._soc_trajectory(dispatch)
+        value = DispatchEvaluation(
+            objective=float(objective),
+            voltages=voltages,
+            currents=branch_currents,
+            grid_power=grid_power,
+            soc=soc,
+            dispatch=dispatch,
+            residual=max_residual,
+        )
+        self._last_dispatch_key = key
+        self._last_evaluation = value
+        return value
+
 
     def _decision_bounds_and_start(self):
         periods = self.case.n_periods
@@ -335,81 +372,87 @@ class IVRModel:
             p_pv_phase=np.zeros((pv_count, phase_count, periods)),
             q_pv_phase=np.zeros((pv_count, phase_count, periods)),
         )
-        self._variable_layout = []
-        bounds = []
-        start = []
+        variables = DecisionVariables()
 
-        def add(name, indices, lower, upper, initial):
-            self._variable_layout.append((name, tuple(indices)))
-            bounds.append((float(lower), float(upper)))
-            start.append(float(np.clip(initial, lower, upper)))
+        self._prepare_bess_variables(variables)
+        self._prepare_pv_variables(variables, dispatch)
 
+        self._fixed_dispatch = dispatch
+        self._variable_layout = variables.layout
+        self._variable_keys = set(variables.layout)
+        return variables.bounds, np.asarray(variables.initial, dtype=float)
+
+    def _prepare_bess_variables(self, variables: DecisionVariables):
+        """Add battery power bounds and an economic starting dispatch."""
+        periods = self.case.n_periods
         for index, connected in enumerate(self.case.bess):
-            device = connected.device
+            battery = connected.device
             device_bounds = (
-                [(0.0, device.p_charge_max_kw)] * periods
-                + [(0.0, device.p_discharge_max_kw)] * periods
+                [(0.0, battery.p_charge_max_kw)] * periods
+                + [(0.0, battery.p_discharge_max_kw)] * periods
             )
             initial = self._economic_initial_dispatch(connected, device_bounds)
             if connected.connection.dispatch_mode == "aggregate":
                 for time in range(periods):
-                    add(
+                    variables.add(
                         "p_charge", (index, time), 0.0,
-                        device.p_charge_max_kw, initial[time],
+                        battery.p_charge_max_kw, initial[time],
                     )
                 for time in range(periods):
-                    add(
+                    variables.add(
                         "p_discharge", (index, time), 0.0,
-                        device.p_discharge_max_kw, initial[periods + time],
+                        battery.p_discharge_max_kw, initial[periods + time],
                     )
-                if device.reactive_control:
+                if battery.reactive_control:
                     for time in range(periods):
-                        add(
-                            "q_bess", (index, time), -device.s_max_kva,
-                            device.s_max_kva, 0.0,
+                        variables.add(
+                            "q_bess", (index, time), -battery.s_max_kva,
+                            battery.s_max_kva, 0.0,
                         )
             else:
                 count = len(connected.connection.phases)
                 for phase in connected.connection.phases:
                     phase_index = self.phase_position[phase]
                     for time in range(periods):
-                        add(
+                        variables.add(
                             "p_charge_phase", (index, phase_index, time),
-                            0.0, device.p_charge_max_kw,
+                            0.0, battery.p_charge_max_kw,
                             initial[time] / count,
                         )
                     for time in range(periods):
-                        add(
+                        variables.add(
                             "p_discharge_phase", (index, phase_index, time),
-                            0.0, device.p_discharge_max_kw,
+                            0.0, battery.p_discharge_max_kw,
                             initial[periods + time] / count,
                         )
-                    if device.reactive_control:
+                    if battery.reactive_control:
                         for time in range(periods):
-                            add(
+                            variables.add(
                                 "q_bess_phase", (index, phase_index, time),
-                                -device.s_max_kva / count,
-                                device.s_max_kva / count,
+                                -battery.s_max_kva / count,
+                                battery.s_max_kva / count,
                                 0.0,
                             )
 
+    def _prepare_pv_variables(self, variables: DecisionVariables, dispatch: Dispatch):
+        """Set solar availability, curve initial values and power bounds."""
         for index, connected in enumerate(self.case.pv):
-            device = connected.device
+            pv = connected.device
             available = np.minimum(
-                connected.available_total_kw.to_numpy(), device.p_max_kw
+                connected.available_total_kw.to_numpy(), pv.p_max_kw
             )
             dispatch.p_pv[index] = available
-            if "var" in device.control:
+            if "var" in pv.control:
                 initial_voltage = float(np.mean([
                     self.case.grid.v_ref_pu[phase]
                     for phase in connected.connection.phases
                 ]))
-                dispatch.q_pv[index] = QMAX_FRAC * device.s_max_kva * np.interp(
+                dispatch.q_pv[index] = QMAX_FRAC * pv.s_max_kva * np.interp(
                     initial_voltage,
                     VV_V,
                     VV_Q,
                 )
-            if "watt" in device.control:
+            if "watt" in pv.control:
                 initial_voltage = float(np.mean([
                     self.case.grid.v_ref_pu[phase]
                     for phase in connected.connection.phases
@@ -422,24 +465,24 @@ class IVRModel:
                 dispatch.p_pv[index] *= fraction
             for time, value in enumerate(available):
                 p_is_variable = (
-                    device.curtailable
-                    or device.q_loss_rated_kw > 0.0
-                    or "watt" in device.control
+                    pv.curtailable
+                    or pv.q_loss_rated_kw > 0.0
+                    or "watt" in pv.control
                 )
                 if p_is_variable and connected.connection.dispatch_mode == "aggregate":
-                    add(
+                    variables.add(
                         "p_pv", (index, time), 0.0, value,
                         dispatch.p_pv[index, time],
                     )
             for time, value in enumerate(available):
                 q_enabled = (
-                    device.control in {"optimal", "volt-var", "volt-var-watt"}
-                    and (value > 0.0 or device.night_var)
+                    pv.control in {"optimal", "volt-var", "volt-var-watt"}
+                    and (value > 0.0 or pv.night_var)
                 )
                 if q_enabled and connected.connection.dispatch_mode == "aggregate":
-                    add(
-                        "q_pv", (index, time), -device.s_max_kva,
-                        device.s_max_kva, dispatch.q_pv[index, time],
+                    variables.add(
+                        "q_pv", (index, time), -pv.s_max_kva,
+                        pv.s_max_kva, dispatch.q_pv[index, time],
                     )
 
             if connected.connection.dispatch_mode == "per_phase":
@@ -448,44 +491,52 @@ class IVRModel:
                     phase_index = self.phase_position[phase]
                     phase_available = np.minimum(
                         connected.available_kw[phase].to_numpy(),
-                        device.p_max_kw / count,
+                        pv.p_max_kw / count,
                     )
                     dispatch.p_pv_phase[index, phase_index] = phase_available
                     for time, value in enumerate(phase_available):
                         p_is_variable = (
-                            device.curtailable
-                            or device.q_loss_rated_kw > 0.0
-                            or "watt" in device.control
+                            pv.curtailable
+                            or pv.q_loss_rated_kw > 0.0
+                            or "watt" in pv.control
                         )
                         if p_is_variable:
-                            add(
+                            variables.add(
                                 "p_pv_phase", (index, phase_index, time),
                                 0.0, value, value,
                             )
                         q_enabled = (
-                            device.control in {
+                            pv.control in {
                                 "optimal", "volt-var", "volt-var-watt"
                             }
-                            and (value > 0.0 or device.night_var)
+                            and (value > 0.0 or pv.night_var)
                         )
                         if q_enabled:
-                            add(
+                            variables.add(
                                 "q_pv_phase", (index, phase_index, time),
-                                -device.s_max_kva / count,
-                                device.s_max_kva / count,
+                                -pv.s_max_kva / count,
+                                pv.s_max_kva / count,
                                 0.0,
                             )
 
-        self._fixed_dispatch = dispatch
-        self._variable_keys = set(self._variable_layout)
-        return bounds, np.asarray(start, dtype=float)
-
     def _unpack_dispatch(self, values):
         dispatch = self._fixed_dispatch.copy()
+        arrays = {
+            "p_charge": dispatch.p_charge,
+            "p_discharge": dispatch.p_discharge,
+            "q_bess": dispatch.q_bess,
+            "p_pv": dispatch.p_pv,
+            "q_pv": dispatch.q_pv,
+            "p_charge_phase": dispatch.p_charge_phase,
+            "p_discharge_phase": dispatch.p_discharge_phase,
+            "q_bess_phase": dispatch.q_bess_phase,
+            "p_pv_phase": dispatch.p_pv_phase,
+            "q_pv_phase": dispatch.q_pv_phase,
+        }
         for value, (name, indices) in zip(
             np.asarray(values, dtype=float), self._variable_layout
         ):
-            getattr(dispatch, name)[indices] = value
+            arrays[name][indices] = value
         for index, connected in enumerate(self.case.bess):
             if connected.connection.dispatch_mode == "aggregate":
                 count = len(connected.connection.phases)
@@ -723,7 +774,7 @@ class IVRModel:
         )
 
     def _device_equalities(self, values, evaluated):
-        dispatch = evaluated["dispatch"]
+        dispatch = evaluated.dispatch
         equalities = []
         for index, connected in enumerate(self.case.bess):
             device = connected.device
@@ -733,7 +784,7 @@ class IVRModel:
                     if device.soc_terminal_frac is None
                     else device.soc_terminal_frac
                 ) * device.e_cap_kwh
-                equalities.append(evaluated["soc"][index, -1] - target)
+                equalities.append(evaluated.soc[index, -1] - target)
         for index, connected in enumerate(self.case.pv):
             device = connected.device
             available = connected.available_total_kw.to_numpy()
@@ -770,7 +821,7 @@ class IVRModel:
                 if "var" in device.control:
                     if connected.connection.dispatch_mode == "aggregate":
                         voltage = self._device_voltage_pu(
-                            connected, evaluated["voltages"][time]
+                            connected, evaluated.voltages[time]
                         )
                         target = QMAX_FRAC * device.s_max_kva * np.interp(
                             voltage, VV_V, VV_Q
@@ -781,7 +832,7 @@ class IVRModel:
                         for phase in connected.connection.phases:
                             phase_index = self.phase_position[phase]
                             voltage = self._device_phase_voltage_pu(
-                                connected, phase, evaluated["voltages"][time]
+                                connected, phase, evaluated.voltages[time]
                             )
                             target = (
                                 QMAX_FRAC * device.s_max_kva / count
@@ -793,11 +844,11 @@ class IVRModel:
         return np.asarray(equalities, dtype=float)
 
     def _device_margins(self, values, evaluated):
-        dispatch = evaluated["dispatch"]
+        dispatch = evaluated.dispatch
         margins = []
         for index, connected in enumerate(self.case.bess):
             device = connected.device
-            soc = evaluated["soc"][index]
+            soc = evaluated.soc[index]
             margins.extend(soc - device.soc_min_frac * device.e_cap_kwh)
             margins.extend(device.soc_max_frac * device.e_cap_kwh - soc)
             if connected.connection.dispatch_mode == "per_phase":
@@ -869,7 +920,7 @@ class IVRModel:
                         if "watt" in device.control:
                             voltage = self._device_phase_voltage_pu(
                                 connected, phase,
-                                evaluated["voltages"][time],
+                                evaluated.voltages[time],
                             )
                             fraction = np.interp(voltage, VW_V, VW_P)
                             margins.append(
@@ -887,7 +938,7 @@ class IVRModel:
                 ))
                 if "watt" in device.control:
                     voltage = self._device_voltage_pu(
-                        connected, evaluated["voltages"][time]
+                        connected, evaluated.voltages[time]
                     )
                     fraction = np.interp(
                         voltage,
@@ -989,7 +1040,7 @@ class IVRModel:
 
     def _network_margins(self, evaluated):
         margins = []
-        for voltage in evaluated["voltages"]:
+        for voltage in evaluated.voltages:
             for position, (bus_id, phase) in enumerate(self.nodes):
                 magnitude = abs(voltage[position]) / self.voltage_bases_kv[position]
                 bus = self.case.buses[bus_id]
@@ -997,11 +1048,11 @@ class IVRModel:
                     magnitude - bus.v_min_pu[phase],
                     bus.v_max_pu[phase] - magnitude,
                 ))
-        for currents_at_time in evaluated["currents"]:
+        for currents_at_time in evaluated.currents:
             for branch, current in zip(self.case.branches, currents_at_time):
                 for position, phase in enumerate(branch.phases):
                     margins.append(branch.norm_amps[phase] - abs(current[position]) * 1000.0)
-        for phase_power in evaluated["grid_power"]:
+        for phase_power in evaluated.grid_power:
             active = float(phase_power.real.sum())
             reactive = float(phase_power.imag.sum())
             margins.extend((
@@ -1015,231 +1066,3 @@ class IVRModel:
 
 def build_model(case: Case) -> IVRModel:
     return IVRModel(case)
-
-
-def attach_results(model: IVRModel, case: Case) -> Case:
-    solution = model.solution
-    if solution is None:
-        raise ValueError("The three-phase IVR model has not been solved")
-    index = case.index
-
-    for bus_id, bus in case.buses.items():
-        voltage = {}
-        angle = {}
-        for phase in bus.phases:
-            position = model.node_position[(bus_id, phase)]
-            values = np.asarray([item[position] for item in solution.voltages_kv])
-            voltage[phase] = pd.Series(
-                abs(values) / model.voltage_bases_kv[position], index=index
-            )
-            angle[phase] = pd.Series(np.degrees(np.angle(values)), index=index)
-        bus.result = BusResult(v_pu=voltage, angle_deg=angle)
-
-    total_losses_kw = 0.0
-    for branch_index, branch in enumerate(case.branches):
-        p_values = {phase: [] for phase in branch.phases}
-        q_values = {phase: [] for phase in branch.phases}
-        i_values = {phase: [] for phase in branch.phases}
-        loss_values = {phase: [] for phase in branch.phases}
-        for time, voltage in enumerate(solution.voltages_kv):
-            current = solution.branch_currents_ka[time][branch_index]
-            from_voltage = np.asarray([
-                voltage[model.node_position[(branch.from_bus, phase)]]
-                for phase in branch.phases
-            ])
-            to_voltage = np.asarray([
-                voltage[model.node_position[(branch.to_bus, phase)]]
-                for phase in branch.phases
-            ])
-            sending_voltage = (
-                model.branch_from_connections[branch_index] @ from_voltage
-            )
-            receiving_voltage = (
-                model.branch_to_connections[branch_index] @ to_voltage
-            )
-            sending = sending_voltage * np.conj(current) * 1000.0
-            to_current = model.branch_taps[branch_index].conj().T @ current
-            receiving = receiving_voltage * np.conj(to_current) * 1000.0
-            losses = sending.real - receiving.real
-            for position, phase in enumerate(branch.phases):
-                p_values[phase].append(sending[position].real)
-                q_values[phase].append(sending[position].imag)
-                i_values[phase].append(abs(current[position]) * 1000.0)
-                loss_values[phase].append(losses[position])
-        series = lambda values: {
-            phase: pd.Series(items, index=index, dtype=float)
-            for phase, items in values.items()
-        }
-        branch.result = BranchResult(
-            p_kw=series(p_values),
-            q_kvar=series(q_values),
-            current_a=series(i_values),
-            loss_kw=series(loss_values),
-        )
-        total_losses_kw += sum(float(values.sum()) for values in branch.result.loss_kw.values())
-
-    grid_import = {phase: [] for phase in case.grid.phases}
-    grid_export = {phase: [] for phase in case.grid.phases}
-    grid_q = {phase: [] for phase in case.grid.phases}
-    for values in solution.grid_power_kva:
-        for position, phase in enumerate(case.grid.phases):
-            grid_import[phase].append(max(values[position].real, 0.0))
-            grid_export[phase].append(max(-values[position].real, 0.0))
-            grid_q[phase].append(values[position].imag)
-    to_series = lambda values: {
-        phase: pd.Series(items, index=index, dtype=float)
-        for phase, items in values.items()
-    }
-    import_series = to_series(grid_import)
-    export_series = to_series(grid_export)
-    cost = case.dt_h * case.price * (
-        sum(import_series.values(), start=pd.Series(0.0, index=index))
-        - case.grid.feed_in_ratio
-        * sum(export_series.values(), start=pd.Series(0.0, index=index))
-    )
-    case.grid.result = GridResult(
-        import_kw=import_series,
-        export_kw=export_series,
-        q_kvar=to_series(grid_q),
-        cost=cost,
-    )
-
-    inverter_losses_kw = 0.0
-    for device_index, connected in enumerate(case.bess):
-        connected.result = BessResult(
-            p_net_kw={
-                phase: pd.Series(
-                    solution.p_charge_phase_kw[
-                        device_index, model.phase_position[phase]
-                    ]
-                    - solution.p_discharge_phase_kw[
-                        device_index, model.phase_position[phase]
-                    ],
-                    index=index,
-                )
-                for phase in connected.connection.phases
-            },
-            q_injection_kvar={
-                phase: pd.Series(
-                    solution.q_bess_phase_kvar[
-                        device_index, model.phase_position[phase]
-                    ],
-                    index=index,
-                )
-                for phase in connected.connection.phases
-            },
-            soc_kwh=pd.Series(solution.soc_kwh[device_index], index=index),
-            soc_frac=pd.Series(
-                solution.soc_kwh[device_index] / connected.device.e_cap_kwh,
-                index=index,
-            ),
-        )
-        if connected.connection.dispatch_mode == "aggregate":
-            inverter_losses_kw += sum(
-                model._bess_q_loss(device_index, value)
-                for value in solution.q_bess_kvar[device_index]
-            )
-        else:
-            phase_indices = [
-                model.phase_position[phase]
-                for phase in connected.connection.phases
-            ]
-            inverter_losses_kw += sum(
-                model._bess_q_loss(
-                    device_index,
-                    solution.q_bess_phase_kvar[
-                        device_index, phase_indices, time
-                    ],
-                )
-                for time in case.periods
-            )
-
-    pv_curtailed = 0.0
-    for device_index, connected in enumerate(case.pv):
-        generated = {}
-        reactive = {}
-        curtailed = {}
-        for phase in connected.connection.phases:
-            phase_index = model.phase_position[phase]
-            available = connected.available_kw[phase].to_numpy()
-            phase_generation = solution.pv_generation_phase_kw[
-                device_index, phase_index
-            ]
-            generated[phase] = pd.Series(phase_generation, index=index)
-            reactive[phase] = pd.Series(
-                solution.q_pv_phase_kvar[device_index, phase_index],
-                index=index,
-            )
-            curtailed[phase] = pd.Series(
-                np.maximum(available - phase_generation, 0.0), index=index
-            )
-        connected.result = PvResult(
-            available_kw=connected.available_kw,
-            generation_kw=generated,
-            q_injection_kvar=reactive,
-            curtailment_kw=curtailed,
-        )
-        pv_curtailed += sum(float(values.sum()) for values in curtailed.values())
-        if connected.connection.dispatch_mode == "aggregate":
-            inverter_losses_kw += sum(
-                model._pv_q_loss(device_index, value)
-                for value in solution.q_pv_kvar[device_index]
-            )
-        else:
-            phase_indices = [
-                model.phase_position[phase]
-                for phase in connected.connection.phases
-            ]
-            inverter_losses_kw += sum(
-                model._pv_q_loss(
-                    device_index,
-                    solution.q_pv_phase_kvar[
-                        device_index, phase_indices, time
-                    ],
-                )
-                for time in case.periods
-            )
-
-    all_voltages = [
-        value
-        for bus in case.buses.values()
-        for series in bus.result.v_pu.values()
-        for value in series
-    ]
-    imported = case.grid.result.import_total_kw
-    exported = case.grid.result.export_total_kw
-    pv_generated = sum(
-        float(series.sum())
-        for connected in case.pv
-        for series in connected.result.generation_kw.values()
-    )
-    case.summary = Summary(
-        status="locally_optimal",
-        objective_cost=solution.objective_cost,
-        energy_cost=float(cost.sum()),
-        energy_import_kwh=float(imported.sum()) * case.dt_h,
-        energy_export_kwh=float(exported.sum()) * case.dt_h,
-        pv_generated_kwh=pv_generated * case.dt_h,
-        pv_curtailed_kwh=pv_curtailed * case.dt_h,
-        losses_kwh=total_losses_kw * case.dt_h,
-        v_min_pu=min(all_voltages),
-        v_max_pu=max(all_voltages),
-        socp_gap_max_pu2=float("nan"),
-        socp_gap_max_normalized=float("nan"),
-        socp_gap_tolerance=float("nan"),
-        socp_tightness_margin=float("nan"),
-        socp_tightness="not_applicable",
-        socp_relaxation_tight=False,
-        inverter_losses_kwh=inverter_losses_kw * case.dt_h,
-        socp_gap_max_relative_flow=float("nan"),
-        socp_current_error_max_a=float("nan"),
-        socp_loss_error_max_w=float("nan"),
-    )
-    case.formulation = "three_phase_ac_ivr_reduced_space"
-    case.quality = {
-        "optimizer": "scipy_slsqp",
-        "iterations": solution.iterations,
-        "max_power_flow_residual_a": solution.max_power_flow_residual_a,
-        "solution_quality": "local_feasible",
-    }
-    return case

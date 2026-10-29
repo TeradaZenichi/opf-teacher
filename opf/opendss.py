@@ -48,20 +48,24 @@ class OpenDSSNetworkData:
     bus_name_to_id: dict[str, int]
 
 
-def load_opendss_network(
-    master_path: str | Path,
-    *,
-    slack_bus: str | int | None = None,
-    bus_ids: Mapping[str, int] | None = None,
-    fallback_v_base_kv: float | None = None,
-    dss: Any | None = None,
-) -> OpenDSSNetworkData:
+@dataclass(frozen=True)
+class OpenDSSSource:
+    master_path: str | Path
+    slack_bus: str | int | None = None
+    bus_ids: Mapping[str, int] | None = None
+    fallback_v_base_kv: float | None = None
+    dss: Any | None = None
+
+
+def load_opendss_network(source: OpenDSSSource) -> OpenDSSNetworkData:
     """Compile Master.dss and read its radial topology."""
-    master = Path(master_path).expanduser().resolve()
+    if not isinstance(source, OpenDSSSource):
+        raise TypeError("load_opendss_network requires an OpenDSSSource")
+    master = Path(source.master_path).expanduser().resolve()
     if not master.is_file():
         raise FileNotFoundError(f"OpenDSS master file not found: {master}")
 
-    dss = dss if dss is not None else _new_dss()
+    dss = source.dss if source.dss is not None else _new_dss()
     caller_directory = Path.cwd()
     try:
         dss.text("clear")
@@ -82,17 +86,17 @@ def load_opendss_network(
     if len(set(names)) != len(names):
         raise ValueError("OpenDSS bus names are not unique after normalization")
 
-    name_to_id = _assign_bus_ids(names, bus_ids)
+    name_to_id = _assign_bus_ids(names, source.bus_ids)
     buses = tuple(_read_bus(dss, name, name_to_id[name]) for name in names)
     bus_by_id = {bus.id: bus for bus in buses}
 
-    lines = _read_lines(dss, name_to_id, bus_by_id, fallback_v_base_kv=fallback_v_base_kv)
+    lines = _read_lines(dss, name_to_id, bus_by_id, fallback_v_base_kv=source.fallback_v_base_kv)
     transformers = _read_transformers(dss, name_to_id)
     raw_branches = lines + transformers
     if not raw_branches:
         raise ValueError(f"OpenDSS circuit in {master} contains no supported branches")
 
-    root = _resolve_root(slack_bus, name_to_id, raw_branches)
+    root = _resolve_root(source.slack_bus, name_to_id, raw_branches)
     branches = _orient_radial(tuple(bus_by_id), raw_branches, root)
     return OpenDSSNetworkData(buses=buses, branches=branches, root_bus=root, bus_name_to_id=name_to_id)
 

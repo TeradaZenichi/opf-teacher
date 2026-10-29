@@ -5,3 +5,4 @@ OpenDSSDirect.py==0.9.4
 gurobipy==13.0.2
 highspy==1.15.1
 scipy==1.18.1
+powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@6ce5d203ee4d92fa5d5c9dc33b6206dfe9d6d0d8

@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 import pyomo.environ as pyo
 
-from opf.data import load_case
-from opf.model import build_model
-from opf.opendss import load_opendss_network, resolve_bus_id
-from opf.results import analyze_socp_gap
+from opf.single_phase.data import load_case
+from opf.single_phase.distflow_socp import build_model
+from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
+from opf.single_phase.results import analyze_socp_gap
 
 
 class _FakeError:
@@ -110,7 +110,7 @@ class OpenDSSImporterTest(unittest.TestCase):
             master = Path(tmp) / "Master.dss"
             master.write_text("! fake model", encoding="utf-8")
             fake = FakeDSS()
-            network = load_opendss_network(master, slack_bus="bus_001", dss=fake)
+            network = load_opendss_network(OpenDSSSource(master, slack_bus="bus_001", dss=fake))
 
         self.assertEqual(network.root_bus, 1)
         self.assertEqual(network.bus_name_to_id["bus_003"], 3)
@@ -162,7 +162,7 @@ class OpenDSSImporterTest(unittest.TestCase):
     def test_real_opendss_fixture(self):
         master = Path(__file__).parent / "fixtures" / "opendss" / "Master.dss"
         caller_directory = Path.cwd()
-        network = load_opendss_network(master, slack_bus="bus_001")
+        network = load_opendss_network(OpenDSSSource(master, slack_bus="bus_001"))
         self.assertEqual(Path.cwd(), caller_directory)
         self.assertEqual(len(network.buses), 3)
         self.assertEqual(len(network.branches), 2)
@@ -219,6 +219,16 @@ class OpenDSSImporterTest(unittest.TestCase):
 
 
 class Case5Test(unittest.TestCase):
+    def test_fixed_power_factor_is_part_of_the_socp_model(self):
+        case = load_case("examples/case5")
+        case.pv[0].control = "fixed_pf"
+        case.pv[0].power_factor = 0.95
+        model = build_model(case)
+        model.ppv["pv1", 12].set_value(0.095)
+        model.qpv["pv1", 12].set_value(math.sqrt(0.1 ** 2 - 0.095 ** 2))
+        self.assertEqual(len(model.pv_fixed_pf), case.n_periods)
+        self.assertAlmostEqual(pyo.value(model.pv_fixed_pf["pv1", 12].body), 0.0)
+
     def test_case5_uses_opendss_as_the_static_network_source(self):
         case = load_case("examples/case5")
         model = build_model(case)
@@ -323,11 +333,12 @@ class TransformerCaseTest(unittest.TestCase):
     def test_transformer_tap_is_inverted_when_branch_orientation_reverses(self):
         master = (Path(__file__).parent / "fixtures" / "transformer_case"
                   / "dss" / "Master.dss")
-        network = load_opendss_network(
+        source = OpenDSSSource(
             master,
             slack_bus="low",
             bus_ids={"source": 1, "low": 2, "load": 3},
         )
+        network = load_opendss_network(source)
         transformer = next(
             branch for branch in network.branches
             if branch.element_type == "transformer"

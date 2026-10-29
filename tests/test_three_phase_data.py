@@ -2,12 +2,72 @@ import unittest
 
 import numpy as np
 
-from opf.data import load_case as load_single_phase_case
+from opf.single_phase.data import load_case as load_single_phase_case
 from opf.three_phase.data import load_case
+from opf.three_phase.ivr_model import DispatchEvaluation, IVRModel
 from teacher import ThreePhaseTeacher
 
 
 class ThreePhaseDataTest(unittest.TestCase):
+    def test_dispatch_evaluation_exposes_physical_results_as_fields(self):
+        case = load_case("tests/fixtures/three_phase_transformer_case")
+        model = IVRModel(case)
+        bounds, initial = model._decision_bounds_and_start()
+        evaluated = model._evaluate_dispatch(initial)
+        self.assertIsInstance(evaluated, DispatchEvaluation)
+        self.assertEqual(len(evaluated.voltages), case.n_periods)
+        self.assertLess(evaluated.residual, 1e-8)
+        self.assertGreater(evaluated.objective, 0.0)
+        self.assertIs(model._evaluate_dispatch(initial.copy()), evaluated)
+
+    def test_horizon_keeps_phase_profiles_aligned_and_the_source_unchanged(self):
+        original = load_case("examples/case5_unbalanced")
+        horizon = original.horizon(start=1, periods=2)
+        self.assertEqual(horizon.n_periods, 2)
+        self.assertTrue(horizon.index.equals(original.index[1:3]))
+        self.assertTrue(horizon.price.index.equals(horizon.index))
+        for bus in horizon.buses.values():
+            for phase in bus.phases:
+                self.assertTrue(bus.p_load_kw[phase].index.equals(horizon.index))
+                self.assertTrue(bus.q_load_kvar[phase].index.equals(horizon.index))
+        for connected in horizon.pv:
+            self.assertTrue(connected.device.avail_kw.index.equals(horizon.index))
+            for values in connected.available_kw.values():
+                self.assertTrue(values.index.equals(horizon.index))
+        original_load = original.buses[2].p_load_kw["a"].copy()
+        horizon.buses[2].p_load_kw["a"].iloc[0] = 999.0
+        self.assertTrue(original.buses[2].p_load_kw["a"].equals(original_load))
+        self.assertEqual(original.n_periods, 24)
+        self.assertEqual(original.horizon(start=23).n_periods, 1)
+
+    def test_horizon_clears_observations_actions_and_results(self):
+        original = load_case("examples/case5_unbalanced")
+        original.buses[2].state = object()
+        original.buses[2].result = object()
+        original.bess[0].action = object()
+        original.pv[0].result = object()
+        original.grid.state = object()
+        original.summary = object()
+        original.quality = {"solution_quality": "old"}
+        horizon = original.horizon(start=1)
+        self.assertIsNone(horizon.buses[2].state)
+        self.assertIsNone(horizon.buses[2].result)
+        self.assertIsNone(horizon.bess[0].action)
+        self.assertIsNone(horizon.pv[0].result)
+        self.assertIsNone(horizon.grid.state)
+        self.assertIsNone(horizon.summary)
+        self.assertIsNone(horizon.quality)
+        self.assertIsNotNone(original.summary)
+
+    def test_horizon_rejects_invalid_ranges(self):
+        case = load_case("examples/case5_unbalanced")
+        for start in (-1, 24, True, 1.5):
+            with self.subTest(start=start), self.assertRaises(ValueError):
+                case.horizon(start=start)
+        for periods in (0, -1, True, 1.5, 25):
+            with self.subTest(periods=periods), self.assertRaises(ValueError):
+                case.horizon(start=0, periods=periods)
+
     def test_case5_unbalanced_preserves_bus_totals(self):
         balanced = load_single_phase_case("examples/case5")
         unbalanced = load_case("examples/case5_unbalanced")

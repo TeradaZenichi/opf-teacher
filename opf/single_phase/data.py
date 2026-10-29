@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from opf.components import Base, Bess, Branch, Bus, Case, Grid, Pv
-from opf.case_source import resolve_case_source, validate_case_config
-from opf.opendss import load_opendss_network, resolve_bus_id
+from opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf.single_phase.components import Branch, Bus, Case, Grid
+from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
 
 
 def load_case(path: str | Path) -> Case:
@@ -31,12 +31,13 @@ def load_case(path: str | Path) -> Case:
     master_ref = network_cfg.get("master")
     if not master_ref:
         raise ValueError("OpenDSS network requires network.master in config.json")
-    dss_network = load_opendss_network(
+    network_source = OpenDSSSource(
         path / master_ref,
         slack_bus=network_cfg.get("slack_bus", cfg.get("grid", {}).get("bus")),
         bus_ids=network_cfg.get("bus_ids"),
         fallback_v_base_kv=base.v_base_kv,
     )
+    dss_network = load_opendss_network(network_source)
     bus_name_to_id = dss_network.bus_name_to_id
 
     def case_bus(value) -> int:
@@ -160,7 +161,7 @@ def load_case(path: str | Path) -> Case:
         bess=bess,
         pv=pv,
         timestamps=list(idx),
-        dt_h=_infer_dt_hours(idx),
+        dt_h=infer_dt_hours(idx),
         price=price,
     )
     case.bus_name_to_id = dict(bus_name_to_id)
@@ -174,18 +175,6 @@ def load_case(path: str | Path) -> Case:
 def _read_json(p: Path) -> dict:
     with open(p, encoding="utf-8") as f:
         return json.load(f)
-
-
-def _infer_dt_hours(idx: pd.DatetimeIndex) -> float:
-    if len(idx) < 2:
-        return 1.0
-    differences = idx.to_series().diff().dropna().dt.total_seconds() / 3600.0
-    if (differences <= 0.0).any() or not all(
-        math.isclose(value, differences.iloc[0], rel_tol=0.0, abs_tol=1e-12)
-        for value in differences
-    ):
-        raise ValueError("demand timestamps must be increasing and equally spaced")
-    return float(differences.iloc[0])
 
 
 def _load_profile(path: Path, ref: str, idx: pd.DatetimeIndex) -> pd.Series:

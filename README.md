@@ -21,34 +21,50 @@ For use as a module from a separate training repository:
 python -m pip install -e path\to\opf-teacher
 ```
 
-Gurobi is the default solver. To share a WLS license across projects, place
-`gurobi.lic` at:
+For the active-power training scripts, install the environment and HiGHS extras
+from this repository's root:
 
-```text
-C:\Users\<username>\gurobi.lic
+```powershell
+python -m pip install -e ".[highs,environment]"
 ```
 
-## Running the example
+`requirements.txt` also includes the environment. It is installed from its
+[own repository](https://github.com/TeradaZenichi/powerflow-opendss-environment)
+at a fixed commit, independently of any local legacy checkout. Scenario inputs
+come from `examples/`, and current outputs go to `results/`. Local `.old/`
+archives are ignored by Git and are not used by the active scripts.
 
-Paths and runtime options are defined at the top of `main.py`:
+The SOCP formulation requires Gurobi or an equivalent compatible solver.
 
-```python
-CASE_PATH = PROJECT_ROOT / "examples" / "case5"
-OUTPUT_PATH = PROJECT_ROOT / "figures" / "case5_dispatch.png"
-SOLVER = "gurobi_direct"
-SOCP_GAP_TOLERANCE = 1e-5
-SHOW_PLOT = False
-ACTIVE_POWER_ONLY = True
-```
+## Running
 
-Run:
+`main.py` solves the battery OPF over the full horizon for `examples/case5_local` using the
+active-power LinDistFlow formulation. It writes device, bus, branch and summary CSVs
+as `results/battery_opf_{devices,buses,branches,summary}.csv`.
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
-With `ACTIVE_POWER_ONLY = True`, `main.py` also writes the devices, buses,
-branches, and summary CSVs under `results/`.
+The script only optimizes and exports trajectories. It does not run an external
+environment or generate training windows.
+
+Change run parameters in the block at the top of each script:
+
+| Parameter | Meaning |
+|---|---|
+| `CASE_PATH` | Scenario directory under `examples/`. |
+| `FORMULATION` | `single_phase_active` or `single_phase_socp`; `train.py` also accepts `three_phase_ivr`. |
+| `OBSERVATION_MODE`, `DEVICE_ID` | `train.py`: central observations or a local view of the selected BESS. |
+| `RESULTS_PATH`, `OUTPUT_NAME` | Output directory and CSV prefix in `main.py`. |
+| `CSV_PATH` | Output CSV path in each `train` script. |
+| `WINDOW` | Positive number of observed states in each X. A longer window than the episode produces zero pairs. |
+
+The scenario's CSV timestamps define the number of periods and their duration.
+Change demand and prices in `demand.csv` and `price.csv`, battery parameters in
+`devices.json`, and network limits in `config.json`. The scripts use all periods.
+The training scripts use `base.s_base_kva` and record `base.v_base_kv` from
+`config.json`; change these fields to select the scenario bases.
 
 The demand-unbalanced three-phase example uses the three-phase AC-IVR solver:
 
@@ -226,8 +242,7 @@ print(case.grid.result.import_kw)
 print(case.buses[4].result.v_pu)
 ```
 
-The formulation can also be selected explicitly without changing the legacy
-`active_power_only` API:
+Select a formulation using one of its three official names:
 
 ```python
 from teacher import Teacher
@@ -267,6 +282,9 @@ _, action = solved.state_action()
 next_state, reward, terminated, truncated, info = env.step(action)
 ```
 
+`train.py` supports central and device-local observations for the balanced
+single-phase equivalent and the unbalanced three-phase model.
+
 Three-phase bus, BESS, PV, and action values are dictionaries indexed by
 `a`, `b`, and `c`. The temporal-window behavior is the same as for the
 single-phase teacher.
@@ -284,23 +302,87 @@ for discharging. Reactive power uses `q_kvar > 0` for injection and
 
 ## Teacher state-action pairs
 
-Run `python example.py` to compare two independent five-bus scenarios:
+`train.py` generates X/Y pairs from an OpenDSS episode for any positive history
+window. Change `WINDOW` in the settings block at the top of the script:
 
-- `examples/case5_central`: BESS `b1` at bus 4 and `b2` at bus 2;
-  PV `pv1` at bus 5 and `pv2` at bus 3. Central X includes every bus and
-  device; Y contains all four devices. The second PV profile is half the first.
-- `examples/case5_local`: only BESS `b1` at bus 4, with no PV.
-  Local X contains bus 4 and battery state; Y contains only battery commands.
+```powershell
+.\.venv\Scripts\python.exe train.py
+```
 
-Both use the reference topology, demand and prices. The example uses HiGHS
-with active power only and illustrative pre-action voltages of 1 pu.
-The example advances through `STEPS` horizons and builds separate temporal
-windows of size `WINDOW` for central and local control. Each label is the first
-action of that horizon. Observations represent an illustrative idle history:
-SoC stays constant and previous commands are zero. Teacher actions are labels
-only, not applied commands. In an actual rollout, replace these observations
-with environment measurements. Each teacher solves its full network even when
-the student's observation is local.
+Install the `environment` extra in the same Python environment first.
+The default settings use `case5_local` (one battery, no PV), solve the
+active-power teacher at every step and execute its first action in OpenDSS.
+Observed states include the resulting SoC and previously applied device powers.
+Set `CASE_PATH` and `FORMULATION` together when selecting another scenario;
+the script also accepts SOCP and three-phase cases.
+
+The outputs are `results/train.csv` and `results/train.json`. The JSON records
+the scenario, formulation, observation mode, selected BESS/bus, window, phase order, number of pairs, bases and time
+encoding. Phase order stays in this metadata so the columns under X remain
+numeric. You can also import the script and call `main(window=5)`.
+
+The formulation and observation scope are independent settings:
+
+```python
+FORMULATION = "single_phase_active"  # Or single_phase_socp / three_phase_ivr.
+OBSERVATION_MODE = "local"  # Or central.
+DEVICE_ID = "b1"  # Used only in local mode.
+WINDOW = 3
+```
+
+| Observation mode | X in each history position | Y |
+|---|---|---|
+| `central` | All buses, BESS/PV states, tariffs, interval length and encoded time | All BESS/PV actions |
+| `local` | The selected BESS's bus, its own SoC and previous powers, interval length and encoded time | Only that BESS's action |
+
+`DEVICE_ID` refers to a BESS in `devices.json`. The local view includes the
+connected bus's voltage and P/Q load, plus phase angles for three-phase cases.
+It excludes other buses/devices and tariffs. `PairSelector` in `teacher.py`
+builds this view from the central pair, using the same global OPF label.
+The timestamp and phase order remain metadata; the training script encodes
+the time before adding the selected state to the history.
+
+Both modes solve the complete OPF and execute every device's physical action
+in OpenDSS, including during warm-up. The selection changes only the exported
+pairs. Single-phase pairs use scalars, three-phase powers/voltages keep their
+phase keys, and each battery keeps one scalar SoC.
+
+Central CSV targets use names such as `y.bess.b1.p_net_pu`. Local CSV targets
+use `y.p_net_pu`; local inputs use `x.0.bus.*` and `x.0.device.*` instead of the
+central `x.0.buses.<id>.*` and `x.0.bess.<id>.*` paths.
+
+An episode with N periods produces `max(0, N - WINDOW + 1)` pairs:
+
+| Window | Pairs for the 24-period case |
+|---|---|
+| 1 | 24 |
+| 3 | 22 |
+| 5 | 20 |
+| 24 | 1 |
+| 25 | 0 |
+
+The first `WINDOW - 1` steps collect history while still executing the teacher
+actions. A window longer than the episode writes a CSV with only its header
+and records zero pairs in the JSON.
+
+The previous scripts remain available:
+
+| Script | Window | Pairs for the 24-period case | Output |
+|---|---|---|---|
+| `train-w1.py` | 1 | 24 | `results/train-w1.csv` |
+| `train-w3.py` | 3 | 22 | `results/train-w3.csv` |
+
+Each CSV row contains `timestamp`, chronological state columns `x.0.` (and
+`x.1.` and `x.2.` for window three), and the current teacher action under `y.`. Actions are
+executed during warm-up as well. These scripts generate labels, not fitted
+learning models. Forecast trajectories do not populate the observed history.
+The timestamp string is row metadata. Each state in X contains numeric
+`time.hour_sin` and `time.hour_cos` features for its own observation time.
+
+The training CSVs store powers in pu in both X and Y. Each CSV has a JSON with
+the same name containing the scenario, window, normalization bases and time encoding. Device
+commands sent to OpenDSS remain in kW/kvar. The result CSVs from `main.py`
+continue to use the physical units shown in their column names.
 
 `Teacher` uses the existing `Case`, `Bus`, `Bess`, `Pv`, and `Grid` objects.
 `BessOpt` remains available with the same build/solve usage. Components now
@@ -312,21 +394,24 @@ The integration/training repository supplies observations from its environment:
 
 ```python
 from teacher import Teacher
-from opf import BusState, BessState, PvState
+from opf.single_phase import BusState, BessState, PvState
+from opf.single_phase.states import local_state_action
 
 
 def label_horizon(case, bus_states, bess_states, pv_states):
-    teacher = Teacher(case, active_power_only=True)
-    solved = teacher.observe(
+    teacher = Teacher(case, formulation="single_phase_active")
+    teacher.observe(
         buses=bus_states,       # {integer bus ID: BusState(...)}
         bess=bess_states,       # {device ID: BessState(...)}
         pv=pv_states,           # {device ID: PvState(...)}
-    ).solve()                  # HiGHS for active mode; Gurobi for full mode
+    )
+    teacher.build()
+    solved = teacher.solve()
 
     central_x, central_y = solved.state_action()
     local_pairs = {
-        "bess": {d.id: d.state_action(solved.buses[d.bus]) for d in solved.bess},
-        "pv": {d.id: d.state_action(solved.buses[d.bus]) for d in solved.pv},
+        "bess": {d.id: local_state_action(d, solved.buses[d.bus]) for d in solved.bess},
+        "pv": {d.id: local_state_action(d, solved.buses[d.bus]) for d in solved.pv},
     }
     return (central_x, central_y), local_pairs, solved.summary
 ```
@@ -336,6 +421,9 @@ Observation constructors (scalar values for one instant):
 - `BusState(v_before_pu, p_load_kw, q_load_kvar)`;
 - `BessState(soc_before_frac, previous_p_kw, previous_q_kvar)`;
 - `PvState(available_kw, previous_p_kw, previous_q_kvar)`.
+
+`soc_before_frac` is one scalar between 0 and 1 per battery in both formulations.
+Three-phase batteries share this energy state across their phase powers.
 
 `observe()` requires every bus and device, including empty dictionaries when
 a device type is absent. Bus IDs are the integer keys of `case.buses`; the
@@ -370,40 +458,178 @@ Local pairs intentionally exclude tariffs, forecasts and other devices.
 The training repository may add information available to its controller,
 including time, terminal targets and forecast windows. These extra features
 are especially relevant to reproduce a teacher that sees the full horizon.
-It also owns vector ordering, normalization and dataset storage. Local
-labels remain actions from a global optimization, not a separately optimized
-local policy.
+It also owns vector ordering and any statistical preprocessing used by its
+learning model. The per-unit conversion below is available for central and
+local pairs. Local labels remain actions from a global optimization, not a
+separately optimized local policy.
 
 Only optimal/locally optimal solver terminations produce actions. This first
 interface does not certify AC feasibility, SOCP tightness, or replay equality;
 use the returned summary and an OpenDSS replay to accept training labels.
 
-## Temporal pairs
+## Per-unit training pairs
 
-`TemporalTeacher` builds a sliding window from successive state-action pairs.
-It accepts either central or local dictionaries and keeps the current action
-as the target. Use one instance per episode/controller stream.
+`normalization.PerUnitNormalizer` takes `case.base`, loaded from the `base`
+object in `config.json`:
+
+```json
+"base": {
+  "s_base_kva": 1000.0,
+  "v_base_kv": 11.0
+}
+```
+
+Every active or reactive power is divided by `s_base_kva`, including loads,
+PV availability, previous device powers and the teacher's actions. The same
+total network base is used for each phase and for aggregate powers. For
+example, -20 kW becomes -0.02 pu with a 1000 kVA base. Values above 1 pu and
+negative values are preserved.
+
+Voltage observations already use `v_before_pu` and are copied directly, without
+a second conversion or centering around 1. The single-phase environment uses
+the configured voltage base; three-phase observations use the OpenDSS base at
+each bus, including the appropriate voltage levels across transformers. The
+normalizer preserves this voltage convention. SoC, timestamps, interval length,
+angles and tariffs also keep their original units. Currents are not part of
+the current observation contract.
 
 ```python
-from teacher import TemporalTeacher
+from normalization import PerUnitNormalizer, TimeEncoder
 
-temporal = TemporalTeacher(window=3)
+normalizer = PerUnitNormalizer(case.base)
+time_encoder = TimeEncoder()
+state, action = solved.state_action()
+normalized_state = normalizer.normalize(state)
+normalized_state["time"] = time_encoder.encode(normalized_state.pop("timestamp"))
+normalized_action = normalizer.normalize(action)
+pair = history.append(normalized_state, normalized_action)
+env.step(action)
+
+# Convert a predicted normalized action before executing it.
+physical_action = normalizer.denormalize(normalized_action)
+```
+
+The conversion creates independent copies and renames power fields:
+
+| Physical field | Per-unit field |
+|---|---|
+| `p_load_kw`, `q_load_kvar` | `p_load_pu`, `q_load_pu` |
+| `previous_p_kw`, `previous_q_kvar` | `previous_p_pu`, `previous_q_pu` |
+| `available_kw`, `generation_kw` | `available_pu`, `generation_pu` |
+| `p_net_kw`, `q_injection_kvar` | `p_net_pu`, `q_injection_pu` |
+
+`normalize()` and `denormalize()` support the scalar single-phase and
+phase-indexed three-phase dictionaries, including local pairs. They use fixed
+bases for every position in the temporal window and do not fit dataset
+statistics. The OPF's state, actions and results remain in their existing units.
+`normalizer.as_dict()` provides JSON-serializable normalization metadata.
+
+## Timestamp features for neural networks
+
+`TimeEncoder` converts the time of day to two numeric features:
+
+```text
+angle = 2 * pi * hours_since_midnight / 24
+hour_sin = sin(angle)
+hour_cos = cos(angle)
+```
+
+The two features are between -1 and 1 and keep neighboring times close across
+midnight. Minutes and fractional seconds contribute to the angle. The encoder
+is a fixed transformation and has no learned parameters or training step.
+
+| Time | `hour_sin` | `hour_cos` |
+|---|---|---|
+| 00:00 | 0 | 1 |
+| 06:00 | 1 | 0 |
+| 12:00 | 0 | -1 |
+| 18:00 | -1 | 0 |
+
+The training scripts replace each state's timestamp string with these features
+before adding it to `StateActionHistory`. The original timestamp remains in
+the row metadata, and the physical teacher observation keeps its timestamp.
+Select the `x.*` numeric columns as the network inputs and `y.*` as the targets.
+
+The same encoder is available for single-phase, three-phase and local states.
+For a local state, add `state["time"] = time_encoder.encode(timestamp)` using
+the timestamp of that observation. The encoding uses the timestamp's local
+clock, without converting timezone offsets to UTC. It represents time of day;
+weekday and annual seasonality are not included. `time_encoder.as_dict()`
+records the method, period and feature names in the run JSON.
+
+## Case ownership and solver settings
+
+When given a `Case`, `Teacher` creates a deep copy. Observations, results and
+actions modify only `teacher.case`; `solve()` returns that owned case. Two
+teachers built from the same input case are independent. Callers that previously
+read results from the input case must now use the returned case or `teacher.case`.
+Paths also load a private case for each teacher.
+
+Use a settings object for explicit solver configuration:
+
+```python
+from teacher import SolveConfig, Teacher
+
+teacher = Teacher("examples/case5", formulation="single_phase_active")
+teacher.build()
+settings = SolveConfig(solver="appsi_highs")
+solved_case = teacher.solve(config=settings)
+```
+
+`SolveConfig` includes `tee`, `socp_gap_tolerance`, `maxiter`, `ftol` and
+`solver_options` for Pyomo solver options. Legacy calls such as
+`solve(solver="appsi_highs")` and `solve(maxiter=500)` remain supported, but cannot
+be combined with `config`.
+
+Single-phase and three-phase cases have distinct contracts:
+
+| Module | Load profile | Device representation |
+|---|---|---|
+| `opf.single_phase.components` / `opf.single_phase.states` | One series per bus quantity | BESS/PV directly |
+| `opf.three_phase.components` / `opf.three_phase.states` | One series per phase | BESS/PV with an explicit connection |
+
+Use `ThreePhaseTeacher` for phase-indexed observations and actions. A supplied
+case must match the selected formulation. The common `Teacher` entry point
+preserves compatibility; the model builders, solver methods and action extraction
+remain separate for each contract.
+
+## State-action history
+
+`Teacher` solves the OPF horizon. `StateActionHistory` collects observed states
+and pairs them with the current action. It accepts central or local dictionaries.
+Use one instance per episode and controller; local devices need separate histories.
+
+The default `window=1` returns `([current_state], current_action)` immediately.
+Larger windows return `([past_states, ..., current_state], current_action)` after
+collecting enough observations. The state input is always a list, even with
+window one; the action target always belongs to the current step.
+
+```python
+from teacher import StateActionHistory
+from opf.single_phase.states import local_state_action
+
+history = StateActionHistory(window=3)  # Omit window for a single-state pair.
 
 # At each observed step, after solving the corresponding horizon:
-x, y = case.state_action()  # Or battery.state_action(case.buses[battery.bus])
-pair = temporal.append(x, y)
+state, action = case.state_action()
+# For a single-phase local pair: local_state_action(battery, case.buses[battery.bus])
+pair = history.append(state, action)
 if pair is not None:
-    x_history, y_current = pair
-    # x_history = [x_t_minus_2, x_t_minus_1, x_t]
+    states, current_action = pair
+    # states = [state_t_minus_2, state_t_minus_1, state_t]
 
 # Before starting another episode:
-temporal.reset()
+history.reset()
 ```
 
 The first `window - 1` calls return `None`. Returned pairs are independent
 copies. The caller supplies observations in chronological order at the chosen
 sampling interval; the class does not check timestamps or advance the environment.
 Do not fill the window with the OPF's predicted future trajectory.
+
+`case.state_action()` still returns a single `(state, action)` pair.
+`TemporalTeacher` remains as a compatibility name with its previous default
+`window=3`. New code should use `StateActionHistory`, whose default is one.
 
 ## BESS inverter
 
@@ -492,16 +718,57 @@ controls are `optimal`, `volt-var`, and `volt-var-watt`.
 
 ## Repository layout
 
+The single-phase formulations are assembled by `ActivePowerModel` and
+`DistFlowModel`. Each class keeps the physical `Case`, defines its variables,
+and registers named rules for network, battery and PV constraints. Dictionaries
+index component objects by ID; parameters are read from the components instead
+of copied into parallel dictionaries. Legacy `build_active_power_model()` and
+`build_model()` functions remain compatibility entry points.
+
+The three-phase `IVRModel` evaluates candidate dispatches into a
+`DispatchEvaluation` object with named cost, voltage, current, grid power, SoC
+and residual fields. Array indices and SciPy solver arguments remain internal.
+
 ```text
 opf/
-├── single_phase/   existing balanced-equivalent formulations and exports
-├── three_phase/    unbalanced AC-IVR formulation, loader, and exports
-├── components.py   shared domain and result objects
-├── data.py         shared case loader
-├── formulations.py formulation names and compatibility rules
-├── opendss.py      shared OpenDSS interface
-├── model.py        compatibility import for single_phase/distflow_socp.py
-└── active_model.py compatibility import for single_phase/active_model.py
-teacher.py          BessOpt interface
-main.py             configured example runner
+|-- common.py           shared components, schema versions, case paths and PV curves
+|-- formulations.py     formulation selection
+|-- opendss.py          shared static network importer
+|-- single_phase/
+|   |-- components.py   single-phase network, case and result classes
+|   |-- data.py         single-phase case loader
+|   |-- states.py       single-phase observations and actions
+|   |-- active_model.py active-power LinDistFlow
+|   |-- distflow_socp.py DistFlow SOCP, including fixed power factor
+|   |-- pv_droop.py     Volt-VAr and Volt-Watt equations
+|   |-- results.py      SOCP results and relaxation gap
+|   `-- export.py       single-phase CSV export
+`-- three_phase/
+    |-- components.py   phase-indexed network and device connections
+    |-- data.py         three-phase case loader
+    |-- states.py       phase-indexed observations and actions
+    |-- phases.py       phase names and validation
+    |-- ivr_model.py    unbalanced AC-IVR
+    |-- results.py      three-phase results
+    `-- export.py       three-phase CSV export
+teacher.py              teacher and state-action history
+main.py                 battery OPF and CSV results
+train-w1.py             OpenDSS X/Y pairs, window 1
+train-w3.py             OpenDSS X/Y pairs, window 3
 ```
+
+Use explicit formulation imports, for example
+`from opf.single_phase.data import load_case` and
+`from opf.three_phase.export import write_result_csvs`. The root package exposes
+only shared types and formulation names. The old root-level forwarding modules
+have been removed; external callers must update those import paths.
+
+Single-phase local pairs are built with
+`opf.single_phase.states.local_state_action(device, bus)`. Shared BESS/PV
+objects only store data and do not import either formulation. Three-phase local
+pairs remain on `ConnectedBess` and `ConnectedPv`.
+
+Case path resolution and schema versions are defined in `opf.common`.
+The former `case_source` and `contracts` modules have been removed. Formulation
+selection accepts only `single_phase_active`, `single_phase_socp` and
+`three_phase_ivr`; aliases and `active_power_only` have been removed.

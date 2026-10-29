@@ -6,134 +6,163 @@ import math
 import pandas as pd
 import pyomo.environ as pyo
 
-from opf.components import (BessResult, BranchResult, BusResult, Case, GridResult, PvResult, Summary)
+from opf.common import Summary
+from opf.single_phase.components import BessResult, BranchResult, BusResult, Case, GridResult, PvResult
 
 
 DEFAULT_TIE_BREAK_PENALTY = 1e-6
 
 
-def build_active_power_model(case: Case, tie_break_penalty: float = DEFAULT_TIE_BREAK_PENALTY) -> pyo.ConcreteModel:
-    if tie_break_penalty < 0.0:
-        raise ValueError("tie_break_penalty cannot be negative")
+class ActivePowerModel:
+    """Build LinDistFlow equations from the physical case components."""
 
-    m = pyo.ConcreteModel(name=f"{case.name}-active-power")
-    base = case.base
-    dt = case.dt_h
-    periods = list(case.periods)
-    previous = {periods[i]: periods[i - 1] for i in range(1, len(periods))}
-    non_root = [bus for bus in case.buses if bus != case.root]
+    def __init__(self, case: Case, tie_break_penalty: float = DEFAULT_TIE_BREAK_PENALTY):
+        if tie_break_penalty < 0.0:
+            raise ValueError("tie_break_penalty cannot be negative")
+        self.case = case
+        self.base = case.base
+        self.tie_break_penalty = tie_break_penalty
+        self.batteries = {battery.id: battery for battery in case.bess}
+        self.pv = {pv.id: pv for pv in case.pv}
+        self.branches = {
+            bus_id: case.branches[case.parent_branch[bus_id]]
+            for bus_id in case.buses if bus_id != case.root
+        }
+        self.model = None
 
-    branch_at = {bus: case.branches[case.parent_branch[bus]] for bus in non_root}
-    resistance = {bus: branch_at[bus].impedance_pu(base, case.buses[branch_at[bus].from_bus])[0] for bus in non_root}
-    tap = {bus: branch_at[bus].tap_ratio for bus in non_root}
-    branch_limit = {bus: base.pu_power(branch_at[bus].s_max_kva) for bus in non_root}
-    load = {bus: base.pu_power(case.buses[bus].p_load_kw.to_numpy()) for bus in case.buses}
-    price = case.price.to_numpy()
+    def build(self) -> pyo.ConcreteModel:
+        self.model = pyo.ConcreteModel(name=f"{self.case.name}-active-power")
+        self.define_sets()
+        self.define_variables()
+        self.define_constraints()
+        self.define_objective()
+        return self.model
 
-    bess = {device.id: device for device in case.bess}
-    pv = {device.id: device for device in case.pv}
-    bess_at = {bus: [device for device in case.bess if device.bus == bus] for bus in case.buses}
-    pv_at = {bus: [device for device in case.pv if device.bus == bus] for bus in case.buses}
-    pv_available = {device.id: base.pu_power(device.avail_kw.to_numpy()) for device in case.pv}
+    def define_sets(self):
+        model = self.model
+        model.T = pyo.Set(initialize=self.case.periods, ordered=True)
+        model.B = pyo.Set(initialize=list(self.case.buses))
+        model.J = pyo.Set(initialize=list(self.branches), ordered=True)
+        model.S = pyo.Set(initialize=list(self.batteries))
+        model.G = pyo.Set(initialize=list(self.pv))
 
-    m.T = pyo.Set(initialize=periods, ordered=True)
-    m.B = pyo.Set(initialize=list(case.buses))
-    m.J = pyo.Set(initialize=non_root, ordered=True)
-    m.S = pyo.Set(initialize=list(bess))
-    m.G = pyo.Set(initialize=list(pv))
+    def define_variables(self):
+        model = self.model
+        grid = self.case.grid
+        model.v = pyo.Var(model.B, model.T, bounds=self.voltage_bounds)
+        model.P = pyo.Var(model.J, model.T, bounds=self.branch_power_bounds)
+        model.pimp = pyo.Var(model.T, domain=pyo.NonNegativeReals, bounds=(0.0, self.base.pu_power(grid.p_import_max_kw)))
+        model.pexp = pyo.Var(model.T, domain=pyo.NonNegativeReals, bounds=(0.0, self.base.pu_power(grid.p_export_max_kw)))
+        model.pch = pyo.Var(model.S, model.T, domain=pyo.NonNegativeReals, bounds=self.battery_charge_bounds)
+        model.pdis = pyo.Var(model.S, model.T, domain=pyo.NonNegativeReals, bounds=self.battery_discharge_bounds)
+        model.soc = pyo.Var(model.S, model.T, bounds=self.battery_energy_bounds)
+        model.ppv = pyo.Var(model.G, model.T, domain=pyo.NonNegativeReals, bounds=self.pv_power_bounds)
 
-    def voltage_bounds(_m, bus, _t):
-        device_bus = case.buses[bus]
-        if bus == case.root:
-            fixed = case.grid.v_ref_pu ** 2
+    def voltage_bounds(self, model, bus_id, time):
+        bus = self.case.buses[bus_id]
+        if bus_id == self.case.root:
+            fixed = self.case.grid.v_ref_pu ** 2
             return fixed, fixed
-        return device_bus.v_min_pu ** 2, device_bus.v_max_pu ** 2
+        return bus.v_min_pu ** 2, bus.v_max_pu ** 2
 
-    m.v = pyo.Var(m.B, m.T, bounds=voltage_bounds)
-    m.P = pyo.Var(m.J, m.T, bounds=lambda _m, bus, _t: (-branch_limit[bus], branch_limit[bus]))
-    m.pimp = pyo.Var(m.T, domain=pyo.NonNegativeReals, bounds=(0.0, base.pu_power(case.grid.p_import_max_kw)))
-    m.pexp = pyo.Var(m.T, domain=pyo.NonNegativeReals, bounds=(0.0, base.pu_power(case.grid.p_export_max_kw)))
+    def branch_power_bounds(self, model, bus_id, time):
+        branch = self.branches[bus_id]
+        limit = self.base.pu_power(branch.s_max_kva)
+        return -limit, limit
 
-    m.pch = pyo.Var(
-        m.S, m.T, domain=pyo.NonNegativeReals,
-        bounds=lambda _m, device_id, _t: (
-            0.0,
-            base.pu_power(min(bess[device_id].p_charge_max_kw, bess[device_id].s_max_kva)),
-        ),
-    )
-    m.pdis = pyo.Var(
-        m.S, m.T, domain=pyo.NonNegativeReals,
-        bounds=lambda _m, device_id, _t: (
-            0.0,
-            base.pu_power(min(bess[device_id].p_discharge_max_kw, bess[device_id].s_max_kva)),
-        ),
-    )
-    m.soc = pyo.Var(
-        m.S, m.T,
-        bounds=lambda _m, device_id, _t: (
-            bess[device_id].soc_min_frac * base.pu_energy(bess[device_id].e_cap_kwh),
-            bess[device_id].soc_max_frac * base.pu_energy(bess[device_id].e_cap_kwh),
-        ),
-    )
+    def battery_charge_bounds(self, model, battery_id, time):
+        battery = self.batteries[battery_id]
+        limit = min(battery.p_charge_max_kw, battery.s_max_kva)
+        return 0.0, self.base.pu_power(limit)
 
-    def pv_bounds(_m, device_id, t):
-        device = pv[device_id]
-        upper = min(pv_available[device_id][t], base.pu_power(device.p_max_kw), base.pu_power(device.s_max_kva))
-        return (0.0, upper) if device.curtailable else (upper, upper)
+    def battery_discharge_bounds(self, model, battery_id, time):
+        battery = self.batteries[battery_id]
+        limit = min(battery.p_discharge_max_kw, battery.s_max_kva)
+        return 0.0, self.base.pu_power(limit)
 
-    m.ppv = pyo.Var(m.G, m.T, domain=pyo.NonNegativeReals, bounds=pv_bounds)
+    def battery_energy_bounds(self, model, battery_id, time):
+        battery = self.batteries[battery_id]
+        capacity = self.base.pu_energy(battery.e_cap_kwh)
+        return battery.soc_min_frac * capacity, battery.soc_max_frac * capacity
 
-    def injection(_m, bus, t):
-        value = -load[bus][t]
-        value += sum(_m.pdis[device.id, t] - _m.pch[device.id, t] for device in bess_at[bus])
-        value += sum(_m.ppv[device.id, t] for device in pv_at[bus])
-        if bus == case.root:
-            value += _m.pimp[t] - _m.pexp[t]
-        return value
+    def pv_power_bounds(self, model, pv_id, time):
+        pv = self.pv[pv_id]
+        available = self.base.pu_power(float(pv.avail_kw.iloc[time]))
+        upper = min(available, self.base.pu_power(pv.p_max_kw), self.base.pu_power(pv.s_max_kva))
+        if pv.curtailable:
+            return 0.0, upper
+        return upper, upper
 
-    def active_balance(_m, bus, t):
-        outgoing = sum(_m.P[child, t] for child in case.children.get(bus, []))
-        incoming = _m.P[bus, t] if bus != case.root else 0.0
-        return incoming + injection(_m, bus, t) == outgoing
+    def active_injection(self, model, bus_id, time):
+        bus = self.case.buses[bus_id]
+        injection = -self.base.pu_power(float(bus.p_load_kw.iloc[time]))
+        for battery in self.batteries.values():
+            if battery.bus == bus_id:
+                injection += model.pdis[battery.id, time] - model.pch[battery.id, time]
+        for pv in self.pv.values():
+            if pv.bus == bus_id:
+                injection += model.ppv[pv.id, time]
+        if bus_id == self.case.root:
+            injection += model.pimp[time] - model.pexp[time]
+        return injection
 
-    m.active_balance = pyo.Constraint(m.B, m.T, rule=active_balance)
+    def define_constraints(self):
+        model = self.model
+        model.active_balance = pyo.Constraint(model.B, model.T, rule=self.active_balance_rule)
+        model.voltage_drop = pyo.Constraint(model.J, model.T, rule=self.voltage_drop_rule)
+        model.soc_balance = pyo.Constraint(model.S, model.T, rule=self.battery_energy_rule)
+        model.soc_terminal = pyo.Constraint(model.S, rule=self.battery_terminal_rule)
 
-    def voltage_drop(_m, bus, t):
-        parent = branch_at[bus].from_bus
-        return _m.v[bus, t] == tap[bus] ** 2 * (_m.v[parent, t] - 2.0 * resistance[bus] * _m.P[bus, t])
+    def active_balance_rule(self, model, bus_id, time):
+        outgoing = sum(model.P[child, time] for child in self.case.children.get(bus_id, []))
+        incoming = model.P[bus_id, time] if bus_id != self.case.root else 0.0
+        return incoming + self.active_injection(model, bus_id, time) == outgoing
 
-    m.voltage_drop = pyo.Constraint(m.J, m.T, rule=voltage_drop)
-
-    def soc_balance(_m, device_id, t):
-        device = bess[device_id]
-        delta = (device.eta_charge * _m.pch[device_id, t] - _m.pdis[device_id, t] / device.eta_discharge) * dt
-        initial = (device.soc_init_frac * base.pu_energy(device.e_cap_kwh))
-        prior = initial if t == periods[0] else _m.soc[device_id, previous[t]]
-        return _m.soc[device_id, t] == prior + delta
-
-    m.soc_balance = pyo.Constraint(m.S, m.T, rule=soc_balance)
-
-    def terminal_soc(_m, device_id):
-        device = bess[device_id]
-        if not device.cyclic_soc and device.soc_terminal_frac is None:
-            return pyo.Constraint.Skip
-        target = (device.soc_init_frac if device.soc_terminal_frac is None else device.soc_terminal_frac)
-        return _m.soc[device_id, periods[-1]] == (target * base.pu_energy(device.e_cap_kwh))
-
-    m.soc_terminal = pyo.Constraint(m.S, rule=terminal_soc)
-
-    feed_in_ratio = case.grid.feed_in_ratio
-    m.energy_cost = pyo.Expression(
-        expr=base.s_base_kva * dt * sum(price[t] * (m.pimp[t] - feed_in_ratio * m.pexp[t]) for t in periods)
-    )
-    m.tie_break_cost = pyo.Expression(
-        expr=tie_break_penalty * base.s_base_kva * dt * (
-            sum(m.pimp[t] + m.pexp[t] for t in periods)
-            + sum(m.pch[device_id, t] + m.pdis[device_id, t] for device_id in m.S for t in periods)
+    def voltage_drop_rule(self, model, bus_id, time):
+        branch = self.branches[bus_id]
+        parent = self.case.buses[branch.from_bus]
+        resistance, _ = branch.impedance_pu(self.base, parent)
+        return model.v[bus_id, time] == branch.tap_ratio ** 2 * (
+            model.v[parent.id, time] - 2.0 * resistance * model.P[bus_id, time]
         )
-    )
-    m.cost = pyo.Objective(expr=m.energy_cost + m.tie_break_cost, sense=pyo.minimize)
-    return m
+
+    def battery_energy_rule(self, model, battery_id, time):
+        battery = self.batteries[battery_id]
+        gain = (battery.eta_charge * model.pch[battery_id, time]
+                - model.pdis[battery_id, time] / battery.eta_discharge) * self.case.dt_h
+        if time == model.T.first():
+            previous = battery.soc_init_frac * self.base.pu_energy(battery.e_cap_kwh)
+        else:
+            previous = model.soc[battery_id, model.T.prev(time)]
+        return model.soc[battery_id, time] == previous + gain
+
+    def battery_terminal_rule(self, model, battery_id):
+        battery = self.batteries[battery_id]
+        if not battery.cyclic_soc and battery.soc_terminal_frac is None:
+            return pyo.Constraint.Skip
+        target = battery.soc_terminal_frac
+        if target is None:
+            target = battery.soc_init_frac
+        return model.soc[battery_id, model.T.last()] == target * self.base.pu_energy(battery.e_cap_kwh)
+
+    def define_objective(self):
+        model = self.model
+        scale = self.base.s_base_kva * self.case.dt_h
+        model.energy_cost = pyo.Expression(expr=scale * sum(
+            float(self.case.price.iloc[time]) * (model.pimp[time] - self.case.grid.feed_in_ratio * model.pexp[time])
+            for time in model.T
+        ))
+        model.tie_break_cost = pyo.Expression(expr=self.tie_break_penalty * scale * (
+            sum(model.pimp[time] + model.pexp[time] for time in model.T)
+            + sum(model.pch[battery_id, time] + model.pdis[battery_id, time]
+                  for battery_id in model.S for time in model.T)
+        ))
+        model.cost = pyo.Objective(expr=model.energy_cost + model.tie_break_cost, sense=pyo.minimize)
+
+
+def build_active_power_model(case: Case, tie_break_penalty: float = DEFAULT_TIE_BREAK_PENALTY) -> pyo.ConcreteModel:
+    """Compatibility builder; new callers may use ActivePowerModel directly."""
+    return ActivePowerModel(case, tie_break_penalty).build()
 
 
 def solve_active_power_opf(
@@ -141,15 +170,14 @@ def solve_active_power_opf(
     solver: str = "appsi_highs",
     tie_break_penalty: float = DEFAULT_TIE_BREAK_PENALTY,
 ) -> Case:
-    model = build_active_power_model(case, tie_break_penalty=tie_break_penalty)
-    optimizer = pyo.SolverFactory(solver)
-    if optimizer is None or not optimizer.available(exception_flag=False):
-        raise RuntimeError(f"Solver {solver!r} unavailable")
-    result = optimizer.solve(model)
-    termination = str(result.solver.termination_condition)
-    if termination.lower() not in {"optimal", "locallyoptimal", "feasible"}:
-        raise RuntimeError(f"Active-power OPF did not solve: {termination}")
-    return _attach_active_results(model, case, termination)
+    """Compatibility API using the same solve path and private copy as Teacher."""
+    # Local import avoids a cycle: Teacher also imports this model builder.
+    from teacher import SolveConfig, Teacher
+
+    teacher = Teacher(case, formulation="single_phase_active")
+    teacher.build(tie_break_penalty=tie_break_penalty)
+    settings = SolveConfig(solver=solver)
+    return teacher.solve(config=settings)
 
 
 def _attach_active_results(model, case: Case, status: str) -> Case:

@@ -10,9 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from opf.active_model import solve_active_power_opf
-from opf.data import load_case
-from opf.export import write_result_csvs
+from teacher import SolveConfig, Teacher
+from opf.single_phase.export import write_result_csvs
 
 
 DEFAULT_CASE_PATH = PROJECT_ROOT / "examples" / "case5"
@@ -30,7 +29,10 @@ def parse_args():
 
 def main():
     args = parse_args()
-    solved = solve_active_power_opf(load_case(args.case), solver=args.solver, tie_break_penalty=args.tie_break_penalty)
+    teacher = Teacher(args.case, formulation="single_phase_active")
+    teacher.build(tie_break_penalty=args.tie_break_penalty)
+    settings = SolveConfig(solver=args.solver)
+    solved = teacher.solve(config=settings)
 
     stem = f"{solved.name}_active_power_opf"
     paths = write_result_csvs(solved, args.output_dir, stem=stem)

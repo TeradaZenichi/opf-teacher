@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 import math
 
 import pandas as pd
 
-from opf.components import Base, Bess, Pv
+from opf.common import Base, Bess, Pv
 from opf.three_phase.phases import normalize_phase, normalize_phases, phase_values
 from opf.three_phase.states import local_state_action, state_values
 
@@ -180,6 +181,7 @@ class DeviceConnection:
 
 @dataclass
 class ConnectedBess:
+    """Battery parameters in device; bus, phases and wiring in connection."""
     device: Bess
     connection: DeviceConnection
     state: object | None = field(default=None, init=False)
@@ -200,6 +202,7 @@ class ConnectedBess:
 
 @dataclass
 class ConnectedPv:
+    """PV parameters in device; wiring and phase availability are separate."""
     device: Pv
     connection: DeviceConnection
     available_kw: Mapping[str | int, pd.Series]
@@ -281,6 +284,10 @@ class Case:
     dt_h: float
     price: pd.Series
     summary: object | None = field(default=None, init=False)
+    formulation: str | None = field(default=None, init=False)
+    quality: dict | None = field(default=None, init=False)
+    source_root: object = field(default=None, init=False)
+    config_path: object = field(default=None, init=False)
     bus_name_to_id: Mapping[str, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
@@ -349,6 +356,49 @@ class Case:
     def root(self):
         return self.grid.bus
 
+    def horizon(self, start: int, periods: int | None = None) -> Case:
+        """Copy a forecast horizon without carrying observations or results."""
+        if isinstance(start, bool) or not isinstance(start, int) or not 0 <= start < self.n_periods:
+            raise ValueError("start must identify a period in the case")
+        if periods is None:
+            stop = self.n_periods
+        else:
+            if isinstance(periods, bool) or not isinstance(periods, int) or periods < 1:
+                raise ValueError("periods must be a positive integer")
+            stop = start + periods
+            if stop > self.n_periods:
+                raise ValueError("The requested horizon exceeds the case")
+
+        case = deepcopy(self)
+        case.timestamps = case.timestamps[start:stop]
+        case.price = case.price.iloc[start:stop].copy()
+        for bus in case.buses.values():
+            for phase in bus.phases:
+                bus.p_load_kw[phase] = bus.p_load_kw[phase].iloc[start:stop].copy()
+                bus.q_load_kvar[phase] = bus.q_load_kvar[phase].iloc[start:stop].copy()
+            bus.state = None
+            bus.result = None
+        for branch in case.branches:
+            branch.result = None
+        for devices in (case.bess, case.pv):
+            for connected in devices:
+                connected.state = None
+                connected.action = None
+                connected.result = None
+                connected.device.state = None
+                connected.device.action = None
+                connected.device.result = None
+        for connected in case.pv:
+            for phase in connected.connection.phases:
+                connected.available_kw[phase] = connected.available_kw[phase].iloc[start:stop].copy()
+            connected.device.avail_kw = connected.device.avail_kw.iloc[start:stop].copy()
+        case.grid.state = None
+        case.grid.result = None
+        case.summary = None
+        case.formulation = None
+        case.quality = None
+        return case
+
     def state_action(self):
         """Return central X/Y data for the first three-phase interval."""
 
@@ -367,8 +417,8 @@ class Case:
             "pv": {},
         }
         y = {"bess": {}, "pv": {}}
-        for kind in ("bess", "pv"):
-            for device in sorted(getattr(self, kind), key=lambda item: item.id):
+        for kind, devices in (("bess", self.bess), ("pv", self.pv)):
+            for device in sorted(devices, key=lambda item: item.id):
                 local_x, action = device.state_action(
                     self.buses[device.connection.bus]
                 )

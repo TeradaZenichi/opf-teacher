@@ -15,6 +15,9 @@ gurobi.lic
 # Claude Code (config local da maquina)
 .claude/settings.local.json
 
+# Arquivos legados locais
+.old/
+
 # Resultados/temporarios
 *.lp
 *.mps

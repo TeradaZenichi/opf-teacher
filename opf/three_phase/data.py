@@ -8,10 +8,8 @@ import re
 
 import pandas as pd
 
-from opf.components import Base, Bess, Pv
-from opf.case_source import resolve_case_source, validate_case_config
-from opf.data import _infer_dt_hours
-from opf.opendss import load_opendss_network, resolve_bus_id
+from opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
 from opf.three_phase.components import (
     Branch,
     Bus,
@@ -71,7 +69,7 @@ def load_case(path: str | Path) -> Case:
     price_path = path / files.get("prices", "price.csv")
     devices_path = path / files.get("devices", "devices.json")
     configured = str(cfg.get("formulation", "three_phase_ivr")).strip().lower()
-    if configured not in {"three_phase_ivr", "unbalanced_ac_ivr"}:
+    if configured != "three_phase_ivr":
         raise ValueError("A three-phase case must declare formulation='three_phase_ivr'")
 
     base = Base(float(cfg["base"]["s_base_kva"]), float(cfg["base"]["v_base_kv"]))
@@ -79,12 +77,13 @@ def load_case(path: str | Path) -> Case:
     master_ref = network_cfg.get("master")
     if not master_ref:
         raise ValueError("OpenDSS network requires network.master in config.json")
-    network = load_opendss_network(
+    network_source = OpenDSSSource(
         path / master_ref,
         slack_bus=network_cfg.get("slack_bus", cfg.get("grid", {}).get("bus")),
         bus_ids=network_cfg.get("bus_ids"),
         fallback_v_base_kv=base.v_base_kv,
     )
+    network = load_opendss_network(network_source)
     bus_name_to_id = network.bus_name_to_id
 
     def case_bus(value) -> int:
@@ -195,7 +194,7 @@ def load_case(path: str | Path) -> Case:
         bess=bess,
         pv=pv,
         timestamps=list(index),
-        dt_h=_infer_dt_hours(index),
+        dt_h=infer_dt_hours(index),
         price=price,
     )
     case.source_root = path

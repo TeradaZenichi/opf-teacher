@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections import deque
+from dataclasses import dataclass, field
 import json
 import math
 from pathlib import Path
@@ -10,83 +11,76 @@ from pathlib import Path
 import pyomo.environ as pyo
 import pandas as pd
 
-from opf.formulations import Formulation, resolve_formulation
-from opf.case_source import resolve_case_source
-from opf.contracts import OBSERVATION_SCHEMA_VERSION
-from opf.single_phase.active_model import build_active_power_model, _attach_active_results
-from opf.components import Case
-from opf.data import load_case
-from opf.single_phase.distflow_socp import build_model as build_single_phase_socp_model
-from opf.single_phase.results import DEFAULT_SOCP_GAP_TOLERANCE, attach_results
-from opf.states import (BessAction, BessState, BusState, GridState, PvAction, PvState)
-from opf.three_phase.components import Case as ThreePhaseCase
-from opf.three_phase.data import load_case as load_three_phase_case
-from opf.three_phase.ivr_model import build_model as build_three_phase_ivr_model
-from opf.three_phase.states import (
-    BessAction as ThreePhaseBessAction,
-    BessState as ThreePhaseBessState,
-    BusState as ThreePhaseBusState,
-    GridState as ThreePhaseGridState,
-    PvAction as ThreePhasePvAction,
-    PvState as ThreePhasePvState,
-)
+from opf.formulations import Formulation, parse_formulation
+from opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_source
+
+from opf import three_phase
+from opf.single_phase import components, data, states
+from opf.single_phase import active_model, distflow_socp, results
 
 
-_BUILDERS = {
-    Formulation.SINGLE_PHASE_ACTIVE: build_active_power_model,
-    Formulation.SINGLE_PHASE_SOCP: build_single_phase_socp_model,
-    Formulation.THREE_PHASE_IVR: build_three_phase_ivr_model,
-}
+@dataclass
+class SolveConfig:
+    """Solver settings; solver=None selects the formulation's default."""
 
-_DEFAULT_SOLVERS = {
-    Formulation.SINGLE_PHASE_ACTIVE: "appsi_highs",
-    Formulation.SINGLE_PHASE_SOCP: "gurobi_direct",
-    Formulation.THREE_PHASE_IVR: "scipy_slsqp",
-}
+    solver: str | None = None
+    tee: bool = False
+    socp_gap_tolerance: float = results.DEFAULT_SOCP_GAP_TOLERANCE
+    maxiter: int = 300
+    ftol: float = 1e-8
+    solver_options: dict = field(default_factory=dict)
 
 
 class Teacher:
+    """Own a private case copy; observe/build/solve modify only that copy."""
+
     def __init__(
         self,
-        source: str | Path | Case | ThreePhaseCase,
-        active_power_only: bool = False,
+        source: str | Path | components.Case | three_phase.components.Case,
         formulation: str | Formulation | None = None,
     ):
         selected_formulation = formulation
         if (
             selected_formulation is None
-            and not active_power_only
-            and not isinstance(source, (Case, ThreePhaseCase))
+            and not isinstance(source, (components.Case, three_phase.components.Case))
         ):
             _, config_path = resolve_case_source(source)
             with open(config_path, encoding="utf-8") as stream:
                 selected_formulation = json.load(stream).get("formulation")
-        self.formulation = resolve_formulation(
-            selected_formulation,
-            active_power_only=active_power_only,
-        )
-        if isinstance(source, (Case, ThreePhaseCase)):
-            self.case: Case | ThreePhaseCase = source
+        if selected_formulation is None:
+            selected_formulation = Formulation.SINGLE_PHASE_SOCP
+        self.formulation = parse_formulation(selected_formulation)
+        if isinstance(source, (components.Case, three_phase.components.Case)):
+            self.case: components.Case | three_phase.components.Case = deepcopy(source)
         elif self.formulation is Formulation.THREE_PHASE_IVR:
-            self.case = load_three_phase_case(source)
+            self.case = three_phase.data.load_case(source)
         else:
-            self.case = load_case(source)
+            self.case = data.load_case(source)
+        if self.formulation is Formulation.THREE_PHASE_IVR:
+            if not isinstance(self.case, three_phase.components.Case):
+                raise TypeError("three_phase_ivr requires an opf.three_phase.Case")
+        elif not isinstance(self.case, components.Case):
+            raise TypeError("Single-phase formulations require an opf.single_phase.components.Case")
         self.model: object | None = None
-        # Kept for callers that still inspect the legacy flag.
-        self.active_power_only = self.formulation is Formulation.SINGLE_PHASE_ACTIVE
 
-    def build(self) -> "Teacher":
+    def build(self, tie_break_penalty: float = active_model.DEFAULT_TIE_BREAK_PENALTY) -> "Teacher":
         self._clear_results()
         self.model = None
-        builder = _BUILDERS[self.formulation]
-        self.model = builder(self.case)
+        if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
+            self.model = active_model.ActivePowerModel(self.case, tie_break_penalty).build()
+        elif self.formulation is Formulation.SINGLE_PHASE_SOCP:
+            self.model = distflow_socp.DistFlowModel(self.case).build()
+        else:
+            self.model = three_phase.ivr_model.build_model(self.case)
         return self
 
-    def observe(self, *, buses: dict[int, BusState], bess: dict[str, BessState], pv: dict[str, PvState]) -> "Teacher":
+    def observe(self, *, buses: dict[int, states.BusState | three_phase.states.BusState],
+                bess: dict[str, states.BessState | three_phase.states.BessState],
+                pv: dict[str, states.PvState | three_phase.states.PvState]) -> "Teacher":
         """Observe the first interval; later case values remain forecasts.
 
         Voltage is a pre-action feature, not an OPF constraint. Supply a new
-        Case to advance the horizon.
+        case to advance the horizon.
         """
         if self.formulation is Formulation.THREE_PHASE_IVR:
             return self._observe_three_phase(buses=buses, bess=bess, pv=pv)
@@ -111,7 +105,7 @@ class Teacher:
             device.state = deepcopy(pv[device.id])
             device.avail_kw = device.avail_kw.astype(float)
             device.avail_kw.iloc[0] = device.state.available_kw
-        case.grid.state = GridState(price, price * case.grid.feed_in_ratio)
+        case.grid.state = states.GridState(price, price * case.grid.feed_in_ratio)
         self.model = None
         self._clear_results()
         return self
@@ -141,7 +135,7 @@ class Teacher:
             connected.device.avail_kw.iloc[0] = sum(
                 connected.state.available_kw.values()
             )
-        case.grid.state = ThreePhaseGridState(
+        case.grid.state = three_phase.states.GridState(
             price,
             price * case.grid.feed_in_ratio,
         )
@@ -168,44 +162,42 @@ class Teacher:
         self._validate_observed_grid(observation["grid"])
 
         bus_values = self._bus_observations_by_id(observation["buses"])
+        buses = {}
+        bess = {}
+        pv = {}
         if self.formulation is Formulation.THREE_PHASE_IVR:
-            buses = {
-                bus_id: ThreePhaseBusState(**values)
-                for bus_id, values in bus_values.items()
-            }
-            bess = {
-                device_id: ThreePhaseBessState(**values)
-                for device_id, values in observation["bess"].items()
-            }
-            pv = {
-                device_id: ThreePhasePvState(**values)
-                for device_id, values in observation["pv"].items()
-            }
+            for bus_id, values in bus_values.items():
+                buses[bus_id] = three_phase.states.BusState(
+                    values["v_before_pu"], values["angle_before_deg"],
+                    values["p_load_kw"], values["q_load_kvar"],
+                )
+            for device_id, values in observation["bess"].items():
+                bess[device_id] = three_phase.states.BessState(
+                    values["soc_before_frac"], values["previous_p_kw"], values["previous_q_kvar"],
+                )
+            for device_id, values in observation["pv"].items():
+                pv[device_id] = three_phase.states.PvState(
+                    values["available_kw"], values["previous_p_kw"], values["previous_q_kvar"],
+                )
         else:
-            buses = {
-                bus_id: BusState(
+            for bus_id, values in bus_values.items():
+                buses[bus_id] = states.BusState(
                     self._single_phase(values["v_before_pu"]),
                     self._single_phase(values["p_load_kw"]),
                     self._single_phase(values["q_load_kvar"]),
                 )
-                for bus_id, values in bus_values.items()
-            }
-            bess = {
-                device_id: BessState(
+            for device_id, values in observation["bess"].items():
+                bess[device_id] = states.BessState(
                     values["soc_before_frac"],
                     self._single_phase(values["previous_p_kw"]),
                     self._single_phase(values["previous_q_kvar"]),
                 )
-                for device_id, values in observation["bess"].items()
-            }
-            pv = {
-                device_id: PvState(
+            for device_id, values in observation["pv"].items():
+                pv[device_id] = states.PvState(
                     self._single_phase(values["available_kw"]),
                     self._single_phase(values["previous_p_kw"]),
                     self._single_phase(values["previous_q_kvar"]),
                 )
-                for device_id, values in observation["pv"].items()
-            }
         return self.observe(buses=buses, bess=bess, pv=pv)
 
     def _bus_observations_by_id(self, observations):
@@ -246,57 +238,89 @@ class Teacher:
         return float(values["a"])
 
     def solve(self, solver: str | None = None, tee: bool = False,
-              socp_gap_tolerance: float = DEFAULT_SOCP_GAP_TOLERANCE,
-              **options) -> Case:
+              socp_gap_tolerance: float = results.DEFAULT_SOCP_GAP_TOLERANCE,
+              *, config: SolveConfig | None = None, **legacy_options) -> components.Case | three_phase.components.Case:
+        """Solve the owned case. Keyword options remain for API compatibility.
+
+        New callers should put solver settings in SolveConfig.
+        """
+        if config is not None:
+            if solver is not None or tee or legacy_options or socp_gap_tolerance != results.DEFAULT_SOCP_GAP_TOLERANCE:
+                raise ValueError("Use config or legacy solver arguments, not both")
+            settings = config
+        else:
+            settings = SolveConfig(solver, tee, socp_gap_tolerance)
+            if self.formulation is Formulation.THREE_PHASE_IVR:
+                settings.maxiter = legacy_options.pop("maxiter", settings.maxiter)
+                settings.ftol = legacy_options.pop("ftol", settings.ftol)
+                if legacy_options:
+                    raise TypeError("Unknown three-phase solver options: " + ", ".join(legacy_options))
+            else:
+                settings.solver_options = legacy_options
         if self.model is None:
             self.build()
         self._clear_results()
-        solver = solver or _DEFAULT_SOLVERS[self.formulation]
         if self.formulation is Formulation.THREE_PHASE_IVR:
-            if solver not in {"scipy_slsqp", "slsqp"}:
-                raise ValueError("three_phase_ivr currently requires solver='scipy_slsqp'")
-            solved = self.model.solve(tee=tee, **options)
-            for device in solved.bess:
-                device.action = ThreePhaseBessAction(
-                    p_net_kw={
-                        phase: float(values.iloc[0])
-                        for phase, values in device.result.p_net_kw.items()
-                    },
-                    q_injection_kvar={
-                        phase: float(values.iloc[0])
-                        for phase, values in device.result.q_injection_kvar.items()
-                    },
-                )
-            for device in solved.pv:
-                device.action = ThreePhasePvAction(
-                    generation_kw={
-                        phase: float(values.iloc[0])
-                        for phase, values in device.result.generation_kw.items()
-                    },
-                    q_injection_kvar={
-                        phase: float(values.iloc[0])
-                        for phase, values in device.result.q_injection_kvar.items()
-                    },
-                )
-            return solved
+            self._solve_three_phase(settings)
+            self._set_three_phase_actions()
+        else:
+            self._solve_single_phase(settings)
+            self._set_single_phase_actions()
+        return self.case
+
+    def _solve_single_phase(self, settings: SolveConfig):
+        solver = settings.solver
+        if solver is None:
+            if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
+                solver = "appsi_highs"
+            else:
+                solver = "gurobi_direct"
         optimizer = pyo.SolverFactory(solver)
         if optimizer is None or not optimizer.available(exception_flag=False):
             raise RuntimeError(f"Solver '{solver}' unavailable")
-        for name, value in options.items():
+        for name, value in settings.solver_options.items():
             optimizer.options[name] = value
-        result = optimizer.solve(self.model, tee=tee)
-        status = str(result.solver.termination_condition)
+        solution = optimizer.solve(self.model, tee=settings.tee)
+        status = str(solution.solver.termination_condition)
         if status.lower() not in {"optimal", "locallyoptimal"}:
             raise RuntimeError(f"Teacher did not solve to optimality: {status}")
         if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
-            _attach_active_results(self.model, self.case, status)
-        elif self.formulation is Formulation.SINGLE_PHASE_SOCP:
-            attach_results(self.model, self.case, status, socp_gap_tolerance=socp_gap_tolerance)
+            active_model._attach_active_results(self.model, self.case, status)
+        else:
+            results.attach_results(self.model, self.case, status, socp_gap_tolerance=settings.socp_gap_tolerance)
+
+    def _solve_three_phase(self, settings: SolveConfig):
+        if settings.solver not in {None, "scipy_slsqp", "slsqp"}:
+            raise ValueError("three_phase_ivr currently requires solver='scipy_slsqp'")
+        if settings.solver_options:
+            raise ValueError("Use maxiter and ftol for the three-phase solver")
+        self.model.solve(tee=settings.tee, maxiter=settings.maxiter, ftol=settings.ftol)
+
+    def _set_single_phase_actions(self):
         for device in self.case.bess:
-            device.action = BessAction(float(device.result.p_net_kw.iloc[0]), float(device.result.q_kvar.iloc[0]))
+            power = float(device.result.p_net_kw.iloc[0])
+            reactive_power = float(device.result.q_kvar.iloc[0])
+            device.action = states.BessAction(power, reactive_power)
         for device in self.case.pv:
-            device.action = PvAction(float(device.result.gen_kw.iloc[0]), float(device.result.q_kvar.iloc[0]))
-        return self.case
+            generation = float(device.result.gen_kw.iloc[0])
+            reactive_power = float(device.result.q_kvar.iloc[0])
+            device.action = states.PvAction(generation, reactive_power)
+
+    def _set_three_phase_actions(self):
+        for device in self.case.bess:
+            power = {}
+            reactive_power = {}
+            for phase in device.connection.phases:
+                power[phase] = float(device.result.p_net_kw[phase].iloc[0])
+                reactive_power[phase] = float(device.result.q_injection_kvar[phase].iloc[0])
+            device.action = three_phase.states.BessAction(power, reactive_power)
+        for device in self.case.pv:
+            generation = {}
+            reactive_power = {}
+            for phase in device.connection.phases:
+                generation[phase] = float(device.result.generation_kw[phase].iloc[0])
+                reactive_power[phase] = float(device.result.q_injection_kvar[phase].iloc[0])
+            device.action = three_phase.states.PvAction(generation, reactive_power)
 
     def _validate_observations(self, buses, bess, pv):
         case = self.case
@@ -310,9 +334,9 @@ class Teacher:
                 raise ValueError("Device IDs must be unique within each device type")
 
         groups = (
-            ("buses", buses, set(case.buses), BusState),
-            ("bess", bess, {d.id for d in case.bess}, BessState),
-            ("pv", pv, {d.id for d in case.pv}, PvState),
+            ("buses", buses, set(case.buses), states.BusState),
+            ("bess", bess, {d.id for d in case.bess}, states.BessState),
+            ("pv", pv, {d.id for d in case.pv}, states.PvState),
         )
         for label, observations, ids, state_type in groups:
             if set(observations) != ids:
@@ -320,7 +344,7 @@ class Teacher:
             for key, state in observations.items():
                 if not isinstance(state, state_type):
                     raise TypeError(f"{label}[{key!r}] must be {state_type.__name__}")
-                if not all(math.isfinite(value) for value in vars(state).values()):
+                if not all(math.isfinite(value) for value in states.state_values(state).values()):
                     raise ValueError(f"Non-finite observation in {label}[{key!r}]")
 
         if any(state.v_before_pu <= 0 for state in buses.values()):
@@ -340,9 +364,9 @@ class Teacher:
     def _validate_three_phase_observations(self, buses, bess, pv):
         case = self.case
         groups = (
-            ("buses", buses, set(case.buses), ThreePhaseBusState),
-            ("bess", bess, {device.id for device in case.bess}, ThreePhaseBessState),
-            ("pv", pv, {device.id for device in case.pv}, ThreePhasePvState),
+            ("buses", buses, set(case.buses), three_phase.states.BusState),
+            ("bess", bess, {device.id for device in case.bess}, three_phase.states.BessState),
+            ("pv", pv, {device.id for device in case.pv}, three_phase.states.PvState),
         )
         for label, observations, ids, state_type in groups:
             if set(observations) != ids:
@@ -367,18 +391,66 @@ class Teacher:
 
     def _clear_results(self):
         self.case.summary = None
-        if hasattr(self.case, "formulation"):
-            del self.case.formulation
-        for item in [*self.case.buses.values(), *self.case.branches, self.case.grid, *self.case.bess, *self.case.pv]:
-            item.result = None
-        for device in [*self.case.bess, *self.case.pv]:
-            device.action = None
+        self.case.formulation = None
+        self.case.quality = None
+        for bus in self.case.buses.values():
+            bus.result = None
+        for branch in self.case.branches:
+            branch.result = None
+        self.case.grid.result = None
+        for devices in (self.case.bess, self.case.pv):
+            for device in devices:
+                device.result = None
+                device.action = None
 
 
-class TemporalTeacher:
-    """Pair a window of past/current observations with the current action."""
+class PairSelector:
+    """Select central pairs or one BESS's local view of the global OPF."""
 
-    def __init__(self, window=3):
+    def __init__(self, case, mode="central", device_id="b1"):
+        if mode not in {"central", "local"}:
+            raise ValueError("Observation mode must be 'central' or 'local'")
+        self.mode = mode
+        self.device_id = device_id if mode == "local" else None
+        self.bus_id = None
+        if mode == "local":
+            devices = {device.id: device for device in case.bess}
+            if device_id not in devices:
+                raise ValueError(f"Unknown local BESS {device_id!r}")
+            device = devices[device_id]
+            if isinstance(case, components.Case):
+                self.bus_id = device.bus
+            else:
+                self.bus_id = device.connection.bus
+
+    def select(self, state, action):
+        if self.mode == "central":
+            return deepcopy(state), deepcopy(action)
+        local_state = {
+            "timestamp": state["timestamp"], "dt_h": state["dt_h"],
+            "bus": state["buses"][self.bus_id],
+            "device": state["bess"][self.device_id],
+        }
+        if "phase_order" in state:
+            local_state["phase_order"] = state["phase_order"]
+        return deepcopy(local_state), deepcopy(action["bess"][self.device_id])
+
+    def as_dict(self):
+        return {
+            "mode": self.mode,
+            "device_type": "bess" if self.mode == "local" else None,
+            "device_id": self.device_id, "bus_id": self.bus_id,
+        }
+
+
+class StateActionHistory:
+    """Collect observed states and pair them with the current action.
+
+    A window of one returns the current state in a one-item list.
+    Use one history per episode and controller.
+    """
+
+    def __init__(self, window: int = 1):
         if isinstance(window, bool) or not isinstance(window, int) or window < 1:
             raise ValueError("window must be a positive integer")
         self._history = deque(maxlen=window)
@@ -387,15 +459,24 @@ class TemporalTeacher:
     def window(self):
         return self._history.maxlen
 
-    def append(self, x, y):
+    def append(self, state: dict, action: dict) -> tuple[list[dict], dict] | None:
         """Append one observed step; return None until the window is full."""
-        self._history.append(deepcopy(x))
+        self._history.append(deepcopy(state))
         if len(self._history) < self.window:
             return None
-        return deepcopy(list(self._history)), deepcopy(y)
+        states = deepcopy(list(self._history))
+        current_action = deepcopy(action)
+        return states, current_action
 
     def reset(self):
         self._history.clear()
+
+
+class TemporalTeacher(StateActionHistory):
+    """Compatibility name retaining the previous default window of three."""
+
+    def __init__(self, window=3):
+        super().__init__(window)
 
 
 class BessOpt(Teacher):
@@ -403,7 +484,7 @@ class BessOpt(Teacher):
 
 
 class ThreePhaseTeacher(Teacher):
-    """Phase-native teacher with an explicit formulation boundary."""
+    """Teacher for unbalanced three-phase cases."""
 
     def __init__(self, source):
         super().__init__(source, formulation=Formulation.THREE_PHASE_IVR)

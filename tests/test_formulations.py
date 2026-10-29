@@ -1,42 +1,39 @@
 import unittest
 
 from opf import Formulation
-from opf.case_source import validate_case_config
-from opf.active_model import build_active_power_model as legacy_active_builder
+from opf.common import validate_case_config
 from opf.formulations import parse_formulation
-from opf.model import build_model as legacy_socp_builder
-from opf.single_phase.active_model import build_active_power_model
-from opf.single_phase.distflow_socp import build_model as build_single_phase_socp_model
+from opf.single_phase import ActivePowerModel, DistFlowModel
 from teacher import Teacher
 
 
 class FormulationSelectionTest(unittest.TestCase):
-    def test_legacy_imports_point_to_single_phase_implementations(self):
-        self.assertIs(legacy_active_builder, build_active_power_model)
-        self.assertIs(legacy_socp_builder, build_single_phase_socp_model)
+    def test_model_classes_keep_separate_builds_independent(self):
+        for model_type in (ActivePowerModel, DistFlowModel):
+            with self.subTest(model=model_type.__name__):
+                case = Teacher("examples/case5").case
+                builder = model_type(case)
+                first = builder.build()
+                original_limit = first.pch["b1", 0].ub
+                case.bess[0].p_charge_max_kw = 10.0
+                second = builder.build()
+                self.assertIsNot(first, second)
+                self.assertEqual(first.pch["b1", 0].ub, original_limit)
+                self.assertAlmostEqual(second.pch["b1", 0].ub, 0.01)
+                self.assertEqual(first.nconstraints(), second.nconstraints())
 
-    def test_legacy_teacher_flags_select_single_phase_formulations(self):
+    def test_default_and_explicit_single_phase_formulations(self):
         full = Teacher("examples/case5")
-        active = Teacher("examples/case5", active_power_only=True)
+        active = Teacher("examples/case5", formulation="single_phase_active")
 
         self.assertIs(full.formulation, Formulation.SINGLE_PHASE_SOCP)
         self.assertIs(active.formulation, Formulation.SINGLE_PHASE_ACTIVE)
-        self.assertFalse(full.active_power_only)
-        self.assertTrue(active.active_power_only)
 
-    def test_explicit_formulation_and_aliases(self):
-        self.assertIs(
-            Teacher("examples/case5", formulation="single_phase_active").formulation,
-            Formulation.SINGLE_PHASE_ACTIVE,
-        )
-        self.assertIs(
-            parse_formulation("balanced_socp"),
-            Formulation.SINGLE_PHASE_SOCP,
-        )
-        self.assertIs(
-            parse_formulation("unbalanced_ac_ivr"),
-            Formulation.THREE_PHASE_IVR,
-        )
+    def test_explicit_formulation_names_and_enum_values(self):
+        for formulation in Formulation:
+            with self.subTest(formulation=formulation):
+                self.assertIs(parse_formulation(formulation.value), formulation)
+                self.assertIs(parse_formulation(formulation), formulation)
 
     def test_configuration_file_is_a_case_source_and_selects_formulation(self):
         teacher = Teacher("examples/case5_unbalanced/config.json")
@@ -45,13 +42,10 @@ class FormulationSelectionTest(unittest.TestCase):
         self.assertEqual(teacher.case.name, "case5_unbalanced")
         self.assertEqual(teacher.case.config_path.name, "config.json")
 
-    def test_conflicting_legacy_flag_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            Teacher(
-                "examples/case5",
-                active_power_only=True,
-                formulation="single_phase_socp",
-            )
+    def test_only_official_formulation_names_are_accepted(self):
+        for name in ("balanced_active", "balanced_socp", "distflow_socp", "unbalanced_ac_ivr"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Unknown OPF formulation"):
+                parse_formulation(name)
 
     def test_three_phase_boundary_rejects_legacy_case(self):
         with self.assertRaisesRegex(ValueError, "three-phase demand column"):
@@ -64,6 +58,14 @@ class FormulationSelectionTest(unittest.TestCase):
     def test_unknown_case_schema_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "schema_version"):
             validate_case_config({"schema_version": 2})
+
+    def test_case_object_must_match_the_selected_formulation(self):
+        single_phase = Teacher("examples/case5").case
+        three_phase = Teacher("examples/case5_unbalanced").case
+        with self.assertRaisesRegex(TypeError, "three_phase.Case"):
+            Teacher(single_phase, formulation="three_phase_ivr")
+        with self.assertRaisesRegex(TypeError, "Single-phase"):
+            Teacher(three_phase, formulation="single_phase_active")
 
 
 if __name__ == "__main__":

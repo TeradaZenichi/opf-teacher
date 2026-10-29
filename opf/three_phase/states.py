@@ -136,7 +136,41 @@ class PvAction:
 def state_values(state):
     if state is None:
         raise ValueError("Missing pre-action observation; call Teacher.observe first")
-    return deepcopy(vars(state))
+    if isinstance(state, BusState):
+        return {
+            "v_before_pu": deepcopy(state.v_before_pu),
+            "angle_before_deg": deepcopy(state.angle_before_deg),
+            "p_load_kw": deepcopy(state.p_load_kw),
+            "q_load_kvar": deepcopy(state.q_load_kvar),
+        }
+    if isinstance(state, BessState):
+        return {
+            "soc_before_frac": deepcopy(state.soc_before_frac),
+            "previous_p_kw": deepcopy(state.previous_p_kw),
+            "previous_q_kvar": deepcopy(state.previous_q_kvar),
+        }
+    if isinstance(state, PvState):
+        return {
+            "available_kw": deepcopy(state.available_kw),
+            "previous_p_kw": deepcopy(state.previous_p_kw),
+            "previous_q_kvar": deepcopy(state.previous_q_kvar),
+        }
+    if isinstance(state, GridState):
+        return {
+            "buy_price_per_kwh": deepcopy(state.buy_price_per_kwh),
+            "sell_price_per_kwh": deepcopy(state.sell_price_per_kwh),
+        }
+    if isinstance(state, BessAction):
+        return {
+            "p_net_kw": deepcopy(state.p_net_kw),
+            "q_injection_kvar": deepcopy(state.q_injection_kvar),
+        }
+    if isinstance(state, PvAction):
+        return {
+            "generation_kw": deepcopy(state.generation_kw),
+            "q_injection_kvar": deepcopy(state.q_injection_kvar),
+        }
+    raise TypeError("Unsupported state or action type")
 
 
 def local_state_action(device, bus):

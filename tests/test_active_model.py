@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from opf.active_model import solve_active_power_opf
-from opf.data import load_case
-from opf.export import branches_dataframe, buses_dataframe, devices_dataframe
+from opf.single_phase.active_model import solve_active_power_opf
+from opf.single_phase.data import load_case
+from opf.single_phase.export import branches_dataframe, buses_dataframe, devices_dataframe
 
 
 class ActivePowerOpfTest(unittest.TestCase):

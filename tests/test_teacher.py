@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 import pyomo.environ as pyo
 
-from opf import BessState, BusState, PvState, load_case
-from teacher import BessOpt, Teacher
+from opf.single_phase import BessState, BusState, PvState, load_case
+from opf.single_phase.states import local_state_action
+from teacher import BessOpt, SolveConfig, Teacher
 
 
 def observations(case, soc=0.7):
@@ -24,9 +25,65 @@ def observations(case, soc=0.7):
 
 
 class TeacherTest(unittest.TestCase):
+    def test_horizon_preserves_source_and_aligns_all_profiles(self):
+        original = load_case("examples/case5")
+        original.summary = object()
+        original.bess[0].action = object()
+        horizon = original.horizon(start=1, periods=3)
+        self.assertTrue(horizon.index.equals(original.index[1:4]))
+        self.assertTrue(horizon.price.index.equals(horizon.index))
+        for bus in horizon.buses.values():
+            self.assertTrue(bus.p_load_kw.index.equals(horizon.index))
+            self.assertTrue(bus.q_load_kw.index.equals(horizon.index))
+        self.assertTrue(horizon.pv[0].avail_kw.index.equals(horizon.index))
+        self.assertIsNone(horizon.summary)
+        self.assertIsNone(horizon.bess[0].action)
+        self.assertIsNotNone(original.summary)
+        original_soc = original.bess[0].soc_init_frac
+        horizon.bess[0].soc_init_frac = 0.7
+        self.assertEqual(original.bess[0].soc_init_frac, original_soc)
+        self.assertEqual(original.n_periods, 24)
+
+    def test_horizon_rejects_invalid_ranges(self):
+        case = load_case("examples/case5")
+        for start in (-1, 24, True, 1.5):
+            with self.subTest(start=start), self.assertRaises(ValueError):
+                case.horizon(start)
+        for periods in (0, -1, True, 1.5, 25):
+            with self.subTest(periods=periods), self.assertRaises(ValueError):
+                case.horizon(0, periods)
+
     def setUp(self):
-        self.teacher = Teacher("examples/case5", active_power_only=True)
+        self.teacher = Teacher("examples/case5", formulation="single_phase_active")
         self.case = self.teacher.case
+
+    def test_teachers_do_not_modify_or_share_the_input_case(self):
+        original = load_case("examples/case5")
+        first = Teacher(original, formulation="single_phase_active")
+        second = Teacher(original, formulation="single_phase_active")
+        original_load = original.buses[4].p_load_kw.copy()
+        original_soc = original.bess[0].soc_init_frac
+
+        first.observe(**observations(first.case)).build()
+        solved = first.solve(config=SolveConfig())
+
+        self.assertIs(solved, first.case)
+        self.assertIsNot(first.case, original)
+        self.assertIsNot(first.case, second.case)
+        self.assertTrue(original.buses[4].p_load_kw.equals(original_load))
+        self.assertEqual(original.bess[0].soc_init_frac, original_soc)
+        self.assertEqual(second.case.bess[0].soc_init_frac, original_soc)
+        self.assertIsNone(original.summary)
+        self.assertIsNone(second.case.bess[0].action)
+
+    def test_config_and_legacy_options_cannot_be_mixed(self):
+        with self.assertRaisesRegex(ValueError, "config or legacy"):
+            self.teacher.solve(config=SolveConfig(), solver="appsi_highs")
+
+    def test_observation_clears_previous_quality(self):
+        self.case.quality = {"solution_quality": "old"}
+        self.teacher.observe(**observations(self.case))
+        self.assertIsNone(self.case.quality)
 
     def test_local_and_central_pairs_use_pre_action_observations(self):
         observed = observations(self.case)
@@ -38,8 +95,8 @@ class TeacherTest(unittest.TestCase):
         x, y = solved.state_action()
         bess = solved.bess[0]
         pv = solved.pv[0]
-        local_x, local_y = bess.state_action(solved.buses[bess.bus])
-        pv_x, pv_y = pv.state_action(solved.buses[pv.bus])
+        local_x, local_y = local_state_action(bess, solved.buses[bess.bus])
+        pv_x, pv_y = local_state_action(pv, solved.buses[pv.bus])
 
         self.assertEqual(x["timestamp"], solved.index[0].isoformat())
         self.assertEqual(x["bess"]["b1"]["soc_before_frac"], 0.7)
@@ -125,7 +182,7 @@ class TeacherTest(unittest.TestCase):
         self.assertEqual(list(y["pv"]), ["pv1", "pv2"])
         self.assertEqual(len(x["buses"]), 5)
         with self.assertRaisesRegex(ValueError, "not connected"):
-            extra.state_action(self.case.buses[4])
+            local_state_action(extra, self.case.buses[4])
 
     def test_observation_invalidates_previous_model_and_labels(self):
         self.teacher.observe(**observations(self.case)).solve()
