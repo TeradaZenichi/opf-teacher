@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "single_phase_case",
+  "base": {"s_base_kva": 100.0, "v_base_kv": 0.23},
+  "network": {"master": "dss/Master.dss", "slack_bus": "source", "representation": "single_phase"},
+  "grid": {"bus": "source", "v_ref_pu": 1.0, "p_import_max_kw": 10.0, "p_export_max_kw": 10.0, "q_max_kvar": 10.0, "feed_in_tariff_ratio": 0.0},
+  "voltage_limits": {"v_min_pu": 0.95, "v_max_pu": 1.05},
+  "defaults": {"power_factor": 0.95}
+}

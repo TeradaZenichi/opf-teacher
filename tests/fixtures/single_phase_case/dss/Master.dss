@@ -1,0 +1,5 @@
+Clear
+New Circuit.single_phase phases=1 bus1=source.1 basekV=0.23 pu=1 frequency=60
+New Line.source_load phases=1 bus1=source.1 bus2=load.1 length=1 units=none R1=0.02 X1=0.01 R0=0.02 X0=0.01 C1=0 C0=0 NormAmps=100
+Set VoltageBases=[0.3983716857408418]
+CalcVoltageBases

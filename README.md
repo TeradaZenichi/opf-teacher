@@ -331,6 +331,38 @@ The training script only selects the local/central view and encodes time before
 adding X/Y to the history. Pass the teacher or NN action directly to `env.step()`.
 `env.normalizer.denormalize(info)` provides physical powers for reports when needed.
 
+An integration repository can keep the shared scenario under `data/case5/`
+and pass that directory (or its configuration file) to both libraries. Neither
+library depends on the directory name `examples`. The environment's
+`EnvironmentConfig(case_path)` uses all case periods by default; an explicit
+`episode_steps` still selects an episode length.
+
+The environment accepts `Action`, `TotalAction` and `PhaseAction` objects in pu,
+as well as the named dictionaries from `Teacher.state_action()`. Every controlled
+device must have a command. Unequal phase commands require per-phase dispatch;
+they are never silently aggregated. Execution failures leave the public time,
+SoC and histories at the last successful step and require `reset()` before
+continuing, since the external DSS context may have changed.
+
+Declare `network.representation` in new case configurations:
+
+- `single_phase`: a physical single-phase network, with a line-to-neutral base;
+- `single_phase_equivalent`: the existing single-phase equivalent, whose
+  powers represent system totals;
+- `three_phase`: the physical three-phase representation, with phase values.
+
+Actual single-phase examples require consistent DSS bus voltage bases; see
+`tests/fixtures/single_phase_case`. The single-phase teacher uses the configured
+voltage base and derives its line rating as `V_base_kV * NormAmps`. Existing
+equivalent cases retain their configured base. Three-phase balanced models
+retain their line-to-line conversion. Single-phase transformer banks remain
+outside the teacher's supported network contract.
+
+Direct observation exchange requires matching network representations.
+When a single-phase equivalent teacher controls a three-phase environment,
+the integration repository owns the observation and action adaptation.
+The environment remains independent of OPF formulations and learning code.
+
 The outputs are `results/train.csv` and `results/train.json`. The JSON records
 the scenario, formulation, observation mode, selected BESS/bus, window, phase order, number of pairs, bases and time
 encoding. Phase order stays in this metadata so the columns under X remain

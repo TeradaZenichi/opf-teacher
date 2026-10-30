@@ -363,7 +363,9 @@ def _read_lines(
             )
 
         kv_ln = bus_by_id[bus1].kv_base_ln
-        if kv_ln > 0.0:
+        if n_phases == 1 and fallback_v_base_kv is not None:
+            s_max_kva = float(fallback_v_base_kv) * norm_amps
+        elif kv_ln > 0.0:
             voltage_base_kv = math.sqrt(3.0) * kv_ln
             power_factor = 1.0 if n_phases == 1 else math.sqrt(3.0)
             s_max_kva = power_factor * voltage_base_kv * norm_amps

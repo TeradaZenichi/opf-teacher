@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opf-teacher"
-version = "0.2.0"
+version = "0.2.1"
 description = "Optimization teachers for balanced and unbalanced distribution OPF"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 environment = [
-    "powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@19e9ae5b678717a3d4dc6cd8d65853ce73384bb2",
+    "powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@bbe9c7d44d579036341378298fd11995fc4ec036",
 ]
 
 highs = ["highspy>=1.15,<2"]

@@ -1,4 +1,9 @@
 import unittest
+from pathlib import Path
+import shutil
+from tempfile import TemporaryDirectory
+
+import pyomo.environ as pyo
 
 from normalization import PUNormalizer, TimeEncoder
 from teacher import PairSelector, Teacher
@@ -11,6 +16,59 @@ except ImportError:
 
 @unittest.skipIf(MicrogridEnv is None, "Install the environment extra to test the integration")
 class EnvironmentContractTest(unittest.TestCase):
+    def test_real_single_phase_voltage_and_current_bases(self):
+        teacher = Teacher("tests/fixtures/single_phase_case", formulation="single_phase_active")
+        case = teacher.case
+        self.assertAlmostEqual(case.buses[case.root].kv_base_ln, 0.23)
+        self.assertAlmostEqual(case.branches[0].s_max_kva, 23.0)
+        env = MicrogridEnv(EnvironmentConfig("tests/fixtures/single_phase_case", 2))
+        observation, _ = env.reset()
+        self.assertEqual(observation["network"]["representation"], "single_phase")
+        self.assertAlmostEqual(observation["buses"]["source"]["v_before_pu"]["a"], 1.0, places=5)
+        teacher.observe_dict(observation)
+
+    def test_both_libraries_can_run_from_a_third_repository_data_folder(self):
+        cases = (
+            ("tests/fixtures/single_phase_case", "single_phase_active"),
+            ("examples/case5_local", "single_phase_active"),
+            ("examples/case5_unbalanced", "three_phase_ivr"),
+        )
+        with TemporaryDirectory() as directory:
+            for original_source, formulation in cases:
+                with self.subTest(source=original_source):
+                    source = Path(directory) / "data" / Path(original_source).name
+                    shutil.copytree(original_source, source)
+                    original = Teacher(source, formulation=formulation).case.horizon(0, periods=2)
+                    env = MicrogridEnv(EnvironmentConfig(source, 2))
+                    observation, _ = env.reset()
+                    for step in original.periods:
+                        teacher = Teacher(original.horizon(step), formulation=formulation)
+                        teacher.observe_dict(observation)
+                        solved = teacher.solve()
+                        _, action = teacher.state_action()
+                        before = observation
+                        observation, _, _, _, info = env.step(action)
+                        self.assertEqual(info["observation_before"], before)
+                        self.assertEqual(info["requested_action"], action)
+                        self.assertEqual(len(env.bess_list[0].array_soc), step + 1)
+                        self.assertAlmostEqual(env.bess_list[0].soc, float(solved.bess[0].result.soc_frac.iloc[0]), places=7)
+                    self.assertIsNone(observation)
+
+    def test_socp_actions_run_in_the_environment(self):
+        if not pyo.SolverFactory("gurobi_direct").available(exception_flag=False):
+            self.skipTest("SOCP integration requires a compatible solver")
+        source = "tests/fixtures/single_phase_case"
+        original = Teacher(source, formulation="single_phase_socp").case.horizon(0, periods=2)
+        env = MicrogridEnv(EnvironmentConfig(source, 2))
+        observation, _ = env.reset()
+        for step in original.periods:
+            teacher = Teacher(original.horizon(step), formulation="single_phase_socp")
+            teacher.observe_dict(observation)
+            teacher.solve()
+            _, action = teacher.state_action()
+            observation, _, _, _, info = env.step(action)
+            self.assertEqual(info["requested_action"], action)
+
     def test_returned_observations_feed_the_teacher_in_both_formulations(self):
         cases = (
             ("examples/case5_local", "single_phase_active"),

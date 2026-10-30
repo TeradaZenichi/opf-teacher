@@ -26,11 +26,12 @@ def phase_power_factor(phases) -> float:
 
 
 def system_voltage_base_kv(kv_base: float | None, phases, fallback_kv: float) -> float:
-    phase_count(phases)
+    if phase_count(phases) == 1:
+        return float(fallback_kv)
     bus_kv = float(kv_base or 0.0)
     if bus_kv <= 0.0:
         return float(fallback_kv)
-    # OpenDSS kVBase is line-neutral, even for our single-phase equivalent.
+    # Balanced three-phase models use the line-to-line voltage base.
     return math.sqrt(3.0) * bus_kv
 
 
