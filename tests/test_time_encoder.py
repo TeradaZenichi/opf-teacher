@@ -5,9 +5,9 @@ import unittest
 
 import pandas as pd
 
-from normalization import PerUnitNormalizer, TimeEncoder
-from opf.common import Base
-from teacher import StateActionHistory
+from opf_teacher.normalization import PerUnitNormalizer, TimeEncoder
+from opf_teacher.opf.common import Base
+from opf_teacher.teacher import StateActionHistory
 
 
 class TimeEncoderTest(unittest.TestCase):

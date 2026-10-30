@@ -2,8 +2,8 @@ import unittest
 
 import pandas as pd
 
-from opf.common import Base, Bess, Pv
-from opf.three_phase import (
+from opf_teacher.opf.common import Base, Bess, Pv
+from opf_teacher.opf.three_phase import (
     BessAction,
     BessState,
     Branch,
@@ -16,7 +16,7 @@ from opf.three_phase import (
     Grid,
     normalize_phase,
 )
-from teacher import Teacher, ThreePhaseTeacher
+from opf_teacher.teacher import Teacher, ThreePhaseTeacher
 
 
 class ThreePhaseContractTest(unittest.TestCase):

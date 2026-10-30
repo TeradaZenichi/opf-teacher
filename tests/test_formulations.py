@@ -1,10 +1,10 @@
 import unittest
 
-from opf import Formulation
-from opf.common import validate_case_config
-from opf.formulations import parse_formulation
-from opf.single_phase import ActivePowerModel, DistFlowModel
-from teacher import Teacher
+from opf_teacher.opf import Formulation
+from opf_teacher.opf.common import validate_case_config
+from opf_teacher.opf.formulations import parse_formulation
+from opf_teacher.opf.single_phase import ActivePowerModel, DistFlowModel
+from opf_teacher.teacher import Teacher
 
 
 class FormulationSelectionTest(unittest.TestCase):

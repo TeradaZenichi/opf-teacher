@@ -1,6 +1,6 @@
 import unittest
 
-from teacher import StateActionHistory, TemporalTeacher
+from opf_teacher.teacher import StateActionHistory, TemporalTeacher
 
 
 class StateActionHistoryTest(unittest.TestCase):

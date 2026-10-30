@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from opf.three_phase.components import Case
+from opf_teacher.opf.three_phase.components import Case
 
 
 def _token(value):

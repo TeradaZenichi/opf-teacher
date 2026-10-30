@@ -5,8 +5,8 @@ import math
 
 import pandas as pd
 
-from opf.common import Base
-from opf.single_phase.states import local_state_action, state_values
+from opf_teacher.opf.common import Base
+from opf_teacher.opf.single_phase.states import local_state_action, state_values
 
 
 def phase_count(phases) -> int:

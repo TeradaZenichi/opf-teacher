@@ -6,8 +6,8 @@ import math
 import pandas as pd
 import pyomo.environ as pyo
 
-from opf.common import Summary
-from opf.single_phase.components import BessResult, BranchResult, BusResult, Case, GridResult, PvResult
+from opf_teacher.opf.common import Summary
+from opf_teacher.opf.single_phase.components import BessResult, BranchResult, BusResult, Case, GridResult, PvResult
 
 
 DEFAULT_TIE_BREAK_PENALTY = 1e-6
@@ -172,7 +172,7 @@ def solve_active_power_opf(
 ) -> Case:
     """Compatibility API using the same solve path and private copy as Teacher."""
     # Local import avoids a cycle: Teacher also imports this model builder.
-    from teacher import SolveConfig, Teacher
+    from opf_teacher.teacher import SolveConfig, Teacher
 
     teacher = Teacher(case, formulation="single_phase_active")
     teacher.build(tie_break_penalty=tie_break_penalty)

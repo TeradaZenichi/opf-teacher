@@ -8,9 +8,9 @@ import math
 
 import pandas as pd
 
-from opf.common import Base, Bess, Pv
-from opf.three_phase.phases import normalize_phase, normalize_phases, phase_values
-from opf.three_phase.states import local_state_action, state_values
+from opf_teacher.opf.common import Base, Bess, Pv
+from opf_teacher.opf.three_phase.phases import normalize_phase, normalize_phases, phase_values
+from opf_teacher.opf.three_phase.states import local_state_action, state_values
 
 
 def _profile_map(

@@ -1,6 +1,6 @@
 """Data classes and solvers for unbalanced three-phase OPF."""
 
-from opf.three_phase.components import (
+from opf_teacher.opf.three_phase.components import (
     Branch,
     Bus,
     Case,
@@ -9,24 +9,24 @@ from opf.three_phase.components import (
     DeviceConnection,
     Grid,
 )
-from opf.three_phase.ivr_model import build_model
-from opf.three_phase.data import load_case
-from opf.three_phase.export import (
+from opf_teacher.opf.three_phase.ivr_model import build_model
+from opf_teacher.opf.three_phase.data import load_case
+from opf_teacher.opf.three_phase.export import (
     branches_dataframe,
     buses_dataframe,
     devices_dataframe,
     summary_dataframe,
     write_result_csvs,
 )
-from opf.three_phase.phases import PHASES, normalize_phase, normalize_phases
-from opf.three_phase.results import (
+from opf_teacher.opf.three_phase.phases import PHASES, normalize_phase, normalize_phases
+from opf_teacher.opf.three_phase.results import (
     BessResult,
     BranchResult,
     BusResult,
     GridResult,
     PvResult,
 )
-from opf.three_phase.states import (
+from opf_teacher.opf.three_phase.states import (
     BessAction,
     BessState,
     BusState,

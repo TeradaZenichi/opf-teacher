@@ -10,13 +10,13 @@ import numpy as np
 
 import pandas as pd
 
-from opf.common import Summary
-from opf.three_phase.components import Case, _profile_map
-from opf.three_phase.phases import normalize_phases
+from opf_teacher.opf.common import Summary
+from opf_teacher.opf.three_phase.components import Case, _profile_map
+from opf_teacher.opf.three_phase.phases import normalize_phases
 
 
 if TYPE_CHECKING:
-    from opf.three_phase.ivr_model import IVRModel
+    from opf_teacher.opf.three_phase.ivr_model import IVRModel
 
 
 def _aligned_profiles(values, phases, *, label, index=None):

@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Mapping
 
-from opf.three_phase.phases import normalize_phases, phase_values
+from opf_teacher.opf.three_phase.phases import normalize_phases, phase_values
 
 
 @dataclass

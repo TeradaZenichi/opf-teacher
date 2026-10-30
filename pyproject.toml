@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opf-teacher"
-version = "0.2.2"
+version = "0.3.0"
 description = "Optimization teachers for balanced and unbalanced distribution OPF"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 environment = [
-    "powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@e975cfbf0fcb013c926114b0b1103b7c3410ac66",
+    "opendss-environment>=0.5,<0.6",
 ]
 
 highs = ["highspy>=1.15,<2"]
@@ -26,7 +26,8 @@ gurobi = ["gurobipy>=13,<14"]
 plot = ["matplotlib>=3.10,<4"]
 
 [tool.setuptools]
-py-modules = ["teacher", "normalization"]
+package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-include = ["opf*"]
+include = ["opf_teacher*"]
+namespaces = false

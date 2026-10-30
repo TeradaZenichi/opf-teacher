@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 import pyomo.environ as pyo
 
-from opf.single_phase.data import load_case
-from opf.single_phase.distflow_socp import build_model
-from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
-from opf.single_phase.results import analyze_socp_gap
+from opf_teacher.opf.single_phase.data import load_case
+from opf_teacher.opf.single_phase.distflow_socp import build_model
+from opf_teacher.opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
+from opf_teacher.opf.single_phase.results import analyze_socp_gap
 
 
 class _FakeError:
@@ -136,7 +136,7 @@ class OpenDSSImporterTest(unittest.TestCase):
             (case_dir / "dss" / "Master.dss").write_text("! fake", encoding="utf-8")
             self._write_case_files(case_dir)
 
-            with patch("opf.opendss._new_dss", return_value=FakeDSS()):
+            with patch("opf_teacher.opf.opendss._new_dss", return_value=FakeDSS()):
                 case = load_case(case_dir)
 
         self.assertEqual(case.bus_name_to_id["bus_002"], 2)

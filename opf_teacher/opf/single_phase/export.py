@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from opf.single_phase.components import Case, phase_power_factor, system_voltage_base_kv
+from opf_teacher.opf.single_phase.components import Case, phase_power_factor, system_voltage_base_kv
 
 
 def _column_token(value: object) -> str:

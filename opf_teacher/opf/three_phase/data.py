@@ -8,9 +8,9 @@ import re
 
 import pandas as pd
 
-from opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
-from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
-from opf.three_phase.components import (
+from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf_teacher.opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
+from opf_teacher.opf.three_phase.components import (
     Branch,
     Bus,
     Case,
@@ -19,7 +19,7 @@ from opf.three_phase.components import (
     DeviceConnection,
     Grid,
 )
-from opf.three_phase.phases import normalize_phases
+from opf_teacher.opf.three_phase.phases import normalize_phases
 
 
 _DEMAND_COLUMN = re.compile(r"^(P|Q)(.+)_([abcABC123])$")

@@ -12,14 +12,32 @@ formulation in [English](docs/formulation.md) or
 
 ```powershell
 python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ..\opendss_environment
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+The environment integration requires the `opendss_environment` checkout with
+the version 0.5 package API. The command above assumes the two repositories
+are sibling folders. Install that checkout before the teacher requirements
+or the optional `environment` extra.
 
 For use as a module from a separate training repository:
 
 ```powershell
-python -m pip install -e path\to\opf-teacher
+python -m pip install -e path\to\opf_teacher
 ```
+
+The Python package is `opf_teacher`; the distribution name remains `opf-teacher`.
+Use explicit package imports:
+
+```python
+from opf_teacher.teacher import Teacher
+from opf_teacher.opf.single_phase import load_case
+```
+
+`from opf_teacher import Teacher` is also available. Version 0.3 moves the old
+top-level `teacher`, `normalization`, and `opf` modules under `opf_teacher`.
+Update external imports and reinstall the editable project after this migration.
 
 For the active-power training scripts, install the environment and HiGHS extras
 from this repository's root:
@@ -28,9 +46,11 @@ from this repository's root:
 python -m pip install -e ".[highs,environment]"
 ```
 
-`requirements.txt` also includes the environment. It is installed from its
+`requirements.txt` also includes the environment. Install this project with
+`python -m pip install -e .` to make its package available from other folders.
+The environment is developed in its
 [own repository](https://github.com/TeradaZenichi/powerflow-opendss-environment)
-at a fixed commit, independently of any local legacy checkout. Scenario inputs
+and installed from the sibling checkout for this package migration. Scenario inputs
 come from `examples/`, and current outputs go to `results/`. Local `.old/`
 archives are ignored by Git and are not used by the active scripts.
 
@@ -223,7 +243,7 @@ preserving each bus voltage base.
 ## Python API
 
 ```python
-from teacher import BessOpt
+from opf_teacher.teacher import BessOpt
 
 case = BessOpt("examples/case5").build().solve(
     solver="gurobi_direct",
@@ -245,7 +265,7 @@ print(case.buses[4].result.v_pu)
 Select a formulation using one of its three official names:
 
 ```python
-from teacher import Teacher
+from opf_teacher.teacher import Teacher
 
 active = Teacher("examples/case5", formulation="single_phase_active")
 full = Teacher("examples/case5", formulation="single_phase_socp")
@@ -258,8 +278,8 @@ unbalanced = Teacher(
 For three-phase observations, use `ThreePhaseTeacher`:
 
 ```python
-from teacher import ThreePhaseTeacher
-from opf.three_phase import BusState, BessState, PvState
+from opf_teacher.teacher import ThreePhaseTeacher
+from opf_teacher.opf.three_phase import BusState, BessState, PvState
 
 teacher = ThreePhaseTeacher("examples/case5_unbalanced")
 solved = teacher.observe(
@@ -290,8 +310,8 @@ Three-phase bus, BESS, PV, and action values are dictionaries indexed by
 single-phase teacher.
 
 The existing models are single-phase equivalents for balanced systems and live
-under `opf/single_phase/`. Three-phase buses, branches, device connections,
-states, actions, and results are available under `opf/three_phase/`; see the
+under `opf_teacher/opf/single_phase/`. Three-phase buses, branches, device connections,
+states, actions, and results are available under `opf_teacher/opf/three_phase/`; see the
 [three-phase contract](docs/three-phase-contract.md). The three-phase loader
 requires `P<bus>_<phase>` and `Q<bus>_<phase>` demand columns and the AC-IVR
 solver retains the full line impedance matrices.
@@ -337,15 +357,15 @@ library depends on the directory name `examples`. The environment's
 `EnvironmentConfig(case_path)` uses all case periods by default; an explicit
 `episode_steps` still selects an episode length.
 
-The environment implementation lives in `microgrid_env.py` at the root of
-its own repository, alongside its `main_env.py` example runner:
+The environment implementation lives in `opendss_environment/microgrid_env.py`
+inside its own repository, alongside its `main_env.py` example runner:
 
 ```python
-from microgrid_env import EnvironmentConfig, MicrogridEnv
+from opendss_environment import EnvironmentConfig, MicrogridEnv
 ```
 
-Its `opendss_env/` package contains the supporting modules. Previous imports
-from `opendss_env` remain compatible.
+Its `opendss_environment/` package contains the environment and supporting modules.
+Use version 0.5 or later of the `opendss-environment` distribution.
 
 The environment accepts `Action`, `TotalAction` and `PhaseAction` objects in pu,
 as well as the named dictionaries from `Teacher.state_action()`. Every controlled
@@ -450,7 +470,7 @@ trajectory. Grid exchange is a result, not a controllable device action.
 The integration/training repository supplies observations from its environment:
 
 ```python
-from teacher import PairSelector, Teacher
+from opf_teacher.teacher import PairSelector, Teacher
 
 
 def label_horizon(case, observation, device_id):
@@ -545,7 +565,7 @@ the current observation contract.
 
 ```python
 from pu_normalizer import PUNormalizer
-from normalization import TimeEncoder
+from opf_teacher.normalization import TimeEncoder
 
 normalizer = PUNormalizer(case.base.s_base_kva, case.base.v_base_kv)
 time_encoder = TimeEncoder()
@@ -620,7 +640,7 @@ Paths also load a private case for each teacher.
 Use a settings object for explicit solver configuration:
 
 ```python
-from teacher import SolveConfig, Teacher
+from opf_teacher.teacher import SolveConfig, Teacher
 
 teacher = Teacher("examples/case5", formulation="single_phase_active")
 teacher.build()
@@ -637,8 +657,8 @@ Single-phase and three-phase cases have distinct contracts:
 
 | Module | Load profile | Device representation |
 |---|---|---|
-| `opf.single_phase.components` / `opf.single_phase.states` | One series per bus quantity | BESS/PV directly |
-| `opf.three_phase.components` / `opf.three_phase.states` | One series per phase | BESS/PV with an explicit connection |
+| `opf_teacher.opf.single_phase.components` / `opf_teacher.opf.single_phase.states` | One series per bus quantity | BESS/PV directly |
+| `opf_teacher.opf.three_phase.components` / `opf_teacher.opf.three_phase.states` | One series per phase | BESS/PV with an explicit connection |
 
 Use `ThreePhaseTeacher` for phase-indexed observations and actions. A supplied
 case must match the selected formulation. The common `Teacher` entry point
@@ -657,7 +677,7 @@ collecting enough observations. The state input is always a list, even with
 window one; the action target always belongs to the current step.
 
 ```python
-from teacher import StateActionHistory
+from opf_teacher.teacher import StateActionHistory
 
 history = StateActionHistory(window=3)  # Omit window for a single-state pair.
 
@@ -781,45 +801,48 @@ The three-phase `IVRModel` evaluates candidate dispatches into a
 and residual fields. Array indices and SciPy solver arguments remain internal.
 
 ```text
-opf/
-|-- common.py           shared components, schema versions, case paths and PV curves
-|-- formulations.py     formulation selection
-|-- opendss.py          shared static network importer
-|-- single_phase/
-|   |-- components.py   single-phase network, case and result classes
-|   |-- data.py         single-phase case loader
-|   |-- states.py       single-phase observations and actions
-|   |-- active_model.py active-power LinDistFlow
-|   |-- distflow_socp.py DistFlow SOCP, including fixed power factor
-|   |-- pv_droop.py     Volt-VAr and Volt-Watt equations
-|   |-- results.py      SOCP results and relaxation gap
-|   `-- export.py       single-phase CSV export
-`-- three_phase/
-    |-- components.py   phase-indexed network and device connections
-    |-- data.py         three-phase case loader
-    |-- states.py       phase-indexed observations and actions
-    |-- phases.py       phase names and validation
-    |-- ivr_model.py    unbalanced AC-IVR
-    |-- results.py      three-phase results
-    `-- export.py       three-phase CSV export
-teacher.py              teacher and state-action history
+opf_teacher/
+|-- __init__.py         public teacher classes
+|-- teacher.py          teacher and state-action history
+|-- normalization.py    per-unit conversion and time encoding
+`-- opf/
+    |-- common.py       shared components, schema versions, case paths and PV curves
+    |-- formulations.py formulation selection
+    |-- opendss.py      shared static network importer
+    |-- single_phase/
+    |   |-- components.py   single-phase network, case and result classes
+    |   |-- data.py         single-phase case loader
+    |   |-- states.py       single-phase observations and actions
+    |   |-- active_model.py active-power LinDistFlow
+    |   |-- distflow_socp.py DistFlow SOCP, including fixed power factor
+    |   |-- pv_droop.py     Volt-VAr and Volt-Watt equations
+    |   |-- results.py      SOCP results and relaxation gap
+    |   `-- export.py       single-phase CSV export
+    `-- three_phase/
+        |-- components.py   phase-indexed network and device connections
+        |-- data.py         three-phase case loader
+        |-- states.py       phase-indexed observations and actions
+        |-- phases.py       phase names and validation
+        |-- ivr_model.py    unbalanced AC-IVR
+        |-- results.py      three-phase results
+        `-- export.py       three-phase CSV export
 main.py                 battery OPF and CSV results
 train-w1.py             OpenDSS X/Y pairs, window 1
 train-w3.py             OpenDSS X/Y pairs, window 3
 ```
 
 Use explicit formulation imports, for example
-`from opf.single_phase.data import load_case` and
-`from opf.three_phase.export import write_result_csvs`. The root package exposes
+`from opf_teacher.opf.single_phase.data import load_case` and
+`from opf_teacher.opf.three_phase.export import write_result_csvs`. The `opf_teacher.opf` package exposes
 only shared types and formulation names. The old root-level forwarding modules
 have been removed; external callers must update those import paths.
 
 Single-phase local pairs are built with
-`opf.single_phase.states.local_state_action(device, bus)`. Shared BESS/PV
+`opf_teacher.opf.single_phase.states.local_state_action(device, bus)`. Shared BESS/PV
 objects only store data and do not import either formulation. Three-phase local
 pairs remain on `ConnectedBess` and `ConnectedPv`.
 
-Case path resolution and schema versions are defined in `opf.common`.
+Case path resolution and schema versions are defined in `opf_teacher.opf.common`.
 The former `case_source` and `contracts` modules have been removed. Formulation
 selection accepts only `single_phase_active`, `single_phase_socp` and
 `three_phase_ivr`; aliases and `active_power_only` have been removed.

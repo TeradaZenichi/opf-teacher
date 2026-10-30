@@ -3,10 +3,10 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from opendss_env import EnvironmentConfig, MicrogridEnv
+from opendss_environment import EnvironmentConfig, MicrogridEnv
 
-from normalization import PUNormalizer, TimeEncoder
-from teacher import PairSelector, StateActionHistory, Teacher
+from opf_teacher.normalization import PUNormalizer, TimeEncoder
+from opf_teacher.teacher import PairSelector, StateActionHistory, Teacher
 
 
 # Change the run settings here.

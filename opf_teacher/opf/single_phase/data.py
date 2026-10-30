@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
-from opf.single_phase.components import Branch, Bus, Case, Grid
-from opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
+from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf_teacher.opf.single_phase.components import Branch, Bus, Case, Grid
+from opf_teacher.opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
 
 
 def load_case(path: str | Path) -> Case:

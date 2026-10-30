@@ -1,6 +1,6 @@
 # Unbalanced three-phase contract
 
-The `opf.three_phase` package is independent from the existing single-phase
+The `opf_teacher.opf.three_phase` package is independent from the existing single-phase
 equivalent formulations. It defines the data read by the AC-IVR model.
 
 These model classes retain explicitly named physical fields. The exchanged

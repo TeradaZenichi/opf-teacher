@@ -7,15 +7,15 @@ import math
 import numpy as np
 from scipy.optimize import linprog, minimize
 
-from opf.common import (
+from opf_teacher.opf.common import (
     QMAX_FRAC,
     VV_Q,
     VV_V,
     VW_P,
     VW_V,
 )
-from opf.three_phase.components import Case
-from opf.three_phase.results import attach_results
+from opf_teacher.opf.three_phase.components import Case
+from opf_teacher.opf.three_phase.results import attach_results
 
 
 @dataclass
@@ -99,7 +99,7 @@ class IVRModel:
 
     def __init__(self, case: Case):
         if not isinstance(case, Case):
-            raise TypeError("three_phase_ivr requires an opf.three_phase.Case")
+            raise TypeError("three_phase_ivr requires an opf_teacher.opf.three_phase.Case")
         self.case = case
         self.solution: IVRSolution | None = None
         self._last_dispatch_key: bytes | None = None

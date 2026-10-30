@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from opf.three_phase.export import write_result_csvs
-from teacher import SolveConfig, ThreePhaseTeacher
+from opf_teacher.opf.three_phase.export import write_result_csvs
+from opf_teacher.teacher import SolveConfig, ThreePhaseTeacher
 
 
 def main():

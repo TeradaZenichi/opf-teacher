@@ -3,7 +3,7 @@ import math
 
 import pandas as pd
 
-from opf.common import Base
+from opf_teacher.opf.common import Base
 from pu_normalizer import PUNormalizer
 
 

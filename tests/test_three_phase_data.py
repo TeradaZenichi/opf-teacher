@@ -2,10 +2,10 @@ import unittest
 
 import numpy as np
 
-from opf.single_phase.data import load_case as load_single_phase_case
-from opf.three_phase.data import load_case
-from opf.three_phase.ivr_model import DispatchEvaluation, IVRModel
-from teacher import ThreePhaseTeacher
+from opf_teacher.opf.single_phase.data import load_case as load_single_phase_case
+from opf_teacher.opf.three_phase.data import load_case
+from opf_teacher.opf.three_phase.ivr_model import DispatchEvaluation, IVRModel
+from opf_teacher.teacher import ThreePhaseTeacher
 
 
 class ThreePhaseDataTest(unittest.TestCase):

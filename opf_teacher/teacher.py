@@ -11,13 +11,13 @@ from pathlib import Path
 import pyomo.environ as pyo
 import pandas as pd
 
-from normalization import PUNormalizer
-from opf.formulations import Formulation, parse_formulation
-from opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_source
+from opf_teacher.normalization import PUNormalizer
+from opf_teacher.opf.formulations import Formulation, parse_formulation
+from opf_teacher.opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_source
 
-from opf import three_phase
-from opf.single_phase import components, data, states
-from opf.single_phase import active_model, distflow_socp, results
+from opf_teacher.opf import three_phase
+from opf_teacher.opf.single_phase import components, data, states
+from opf_teacher.opf.single_phase import active_model, distflow_socp, results
 
 
 @dataclass
@@ -59,9 +59,9 @@ class Teacher:
             self.case = data.load_case(source)
         if self.formulation is Formulation.THREE_PHASE_IVR:
             if not isinstance(self.case, three_phase.components.Case):
-                raise TypeError("three_phase_ivr requires an opf.three_phase.Case")
+                raise TypeError("three_phase_ivr requires an opf_teacher.opf.three_phase.Case")
         elif not isinstance(self.case, components.Case):
-            raise TypeError("Single-phase formulations require an opf.single_phase.components.Case")
+            raise TypeError("Single-phase formulations require an opf_teacher.opf.single_phase.components.Case")
         self.normalizer = PUNormalizer(self.case.base.s_base_kva, self.case.base.v_base_kv)
         self.model: object | None = None
 

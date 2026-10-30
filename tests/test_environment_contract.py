@@ -5,11 +5,11 @@ from tempfile import TemporaryDirectory
 
 import pyomo.environ as pyo
 
-from normalization import PUNormalizer, TimeEncoder
-from teacher import PairSelector, Teacher
+from opf_teacher.normalization import PUNormalizer, TimeEncoder
+from opf_teacher.teacher import PairSelector, Teacher
 
 try:
-    from opendss_env import EnvironmentConfig, MicrogridEnv
+    from opendss_environment import EnvironmentConfig, MicrogridEnv
 except ImportError:
     MicrogridEnv = None
 

@@ -1,8 +1,8 @@
 """Solve the battery OPF and export the predicted trajectories."""
 from pathlib import Path
 
-from opf.single_phase.export import write_result_csvs
-from teacher import Teacher
+from opf_teacher.opf.single_phase.export import write_result_csvs
+from opf_teacher.teacher import Teacher
 
 
 # Change the run settings here.

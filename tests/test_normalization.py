@@ -3,10 +3,10 @@ import json
 from pathlib import Path
 import unittest
 
-from normalization import PerUnitNormalizer
-from opf.common import Base
-from opf.single_phase import load_case
-from teacher import StateActionHistory
+from opf_teacher.normalization import PerUnitNormalizer
+from opf_teacher.opf.common import Base
+from opf_teacher.opf.single_phase import load_case
+from opf_teacher.teacher import StateActionHistory
 
 
 ROOT = Path(__file__).resolve().parents[1]

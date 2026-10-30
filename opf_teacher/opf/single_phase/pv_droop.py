@@ -1,7 +1,7 @@
 """Single-phase local Volt-VAr and Volt-Watt controls."""
 import pyomo.environ as pyo
 
-from opf.common import QMAX_FRAC, VV_V, VV_Q, VW_V, VW_P, V_MAX_EMERG
+from opf_teacher.opf.common import QMAX_FRAC, VV_V, VV_Q, VW_V, VW_P, V_MAX_EMERG
 
 
 MODES = ("volt-var", "volt-watt", "volt-var-watt")

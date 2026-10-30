@@ -1,13 +1,13 @@
-"""Generate chronological X/Y pairs from teacher actions executed in OpenDSS."""
+"""Generate chronological X/Y pairs from opf_teacher.teacher actions executed in OpenDSS."""
 import json
 from pathlib import Path
 
 import pandas as pd
-from opendss_env import EnvironmentConfig, MicrogridEnv
+from opendss_environment import EnvironmentConfig, MicrogridEnv
 
-from opf.single_phase import load_case
-from normalization import PUNormalizer, TimeEncoder
-from teacher import StateActionHistory, Teacher
+from opf_teacher.opf.single_phase import load_case
+from opf_teacher.normalization import PUNormalizer, TimeEncoder
+from opf_teacher.teacher import StateActionHistory, Teacher
 
 
 # Change the run settings here.

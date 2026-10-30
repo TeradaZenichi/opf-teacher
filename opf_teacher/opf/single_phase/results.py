@@ -6,8 +6,8 @@ import math
 import pandas as pd
 import pyomo.environ as pyo
 
-from opf.common import Summary
-from opf.single_phase.components import BessResult, BranchResult, BusResult, Case, GridResult, PvResult, phase_power_factor, system_voltage_base_kv
+from opf_teacher.opf.common import Summary
+from opf_teacher.opf.single_phase.components import BessResult, BranchResult, BusResult, Case, GridResult, PvResult, phase_power_factor, system_voltage_base_kv
 
 
 DEFAULT_SOCP_GAP_TOLERANCE = 1e-5

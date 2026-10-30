@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pyomo.environ as pyo
 
-from opf.single_phase import BessState, BusState, PvState, load_case
-from opf.single_phase.states import local_state_action
-from teacher import BessOpt, SolveConfig, Teacher
+from opf_teacher.opf.single_phase import BessState, BusState, PvState, load_case
+from opf_teacher.opf.single_phase.states import local_state_action
+from opf_teacher.teacher import BessOpt, SolveConfig, Teacher
 
 
 def observations(case, soc=0.7):
@@ -264,7 +264,7 @@ class TeacherTest(unittest.TestCase):
     def test_failed_resolve_does_not_leave_previous_actions(self):
         self.teacher.observe(**observations(self.case)).solve()
         failed = SimpleNamespace(solver=SimpleNamespace(termination_condition="infeasible"))
-        with patch("teacher.pyo.SolverFactory") as factory:
+        with patch("opf_teacher.teacher.pyo.SolverFactory") as factory:
             factory.return_value.solve.return_value = failed
             with self.assertRaisesRegex(RuntimeError, "infeasible"):
                 self.teacher.solve()

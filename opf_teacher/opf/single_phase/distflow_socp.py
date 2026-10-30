@@ -5,8 +5,8 @@ import math
 
 import pyomo.environ as pyo
 
-from opf.single_phase.components import Case
-from opf.single_phase import pv_droop
+from opf_teacher.opf.single_phase.components import Case
+from opf_teacher.opf.single_phase import pv_droop
 
 
 THERMAL_LIMIT_NUMERICAL_MARGIN = 1e-10

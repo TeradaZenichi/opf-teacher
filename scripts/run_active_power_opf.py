@@ -10,8 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from teacher import SolveConfig, Teacher
-from opf.single_phase.export import write_result_csvs
+from opf_teacher.teacher import SolveConfig, Teacher
+from opf_teacher.opf.single_phase.export import write_result_csvs
 
 
 DEFAULT_CASE_PATH = PROJECT_ROOT / "examples" / "case5"
