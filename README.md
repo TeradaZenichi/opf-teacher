@@ -337,6 +337,16 @@ library depends on the directory name `examples`. The environment's
 `EnvironmentConfig(case_path)` uses all case periods by default; an explicit
 `episode_steps` still selects an episode length.
 
+The environment implementation lives in `microgrid_env.py` at the root of
+its own repository, alongside its `main_env.py` example runner:
+
+```python
+from microgrid_env import EnvironmentConfig, MicrogridEnv
+```
+
+Its `opendss_env/` package contains the supporting modules. Previous imports
+from `opendss_env` remain compatible.
+
 The environment accepts `Action`, `TotalAction` and `PhaseAction` objects in pu,
 as well as the named dictionaries from `Teacher.state_action()`. Every controlled
 device must have a command. Unequal phase commands require per-phase dispatch;

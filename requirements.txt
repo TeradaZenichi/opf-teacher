@@ -6,4 +6,4 @@ gurobipy==13.0.2
 highspy==1.15.1
 scipy==1.18.1
 pu-normalizer @ git+https://github.com/TeradaZenichi/opf-teacher.git@c38b98f31dfc97e9e393990c6f366f5cbf5a2820#subdirectory=packages/pu-normalizer
-powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@bbe9c7d44d579036341378298fd11995fc4ec036
+powerflow-opendss-environment @ git+https://github.com/TeradaZenichi/powerflow-opendss-environment.git@e975cfbf0fcb013c926114b0b1103b7c3410ac66
