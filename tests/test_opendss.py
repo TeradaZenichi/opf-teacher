@@ -261,8 +261,12 @@ class Case5Test(unittest.TestCase):
         self.assertFalse(case.pv[0].night_var)
         self.assertEqual(model.qbess[bess.id, 0].bounds, (-0.05, 0.05))
         self.assertEqual(model.pbess_loss[bess.id, 0].bounds, (0.0, 0.0005))
-        self.assertEqual(model.nvariables(), 672)
-        self.assertEqual(model.nconstraints(), 588)
+        model.pgrid[0].set_value(-0.01)
+        if pyo.value(model.pimp[0]) != 0.0 or pyo.value(model.pexp[0]) != 0.01:
+            raise ValueError("Incorrect export decomposition for equal tariffs")
+        model.pgrid[0].set_value(0.01)
+        if pyo.value(model.pimp[0]) != 0.01 or pyo.value(model.pexp[0]) != 0.0:
+            raise ValueError("Incorrect import decomposition for equal tariffs")
 
     def test_reactive_losses_follow_rated_quadratic_curve_and_drain_soc(self):
         case = load_case("examples/case5")
@@ -272,9 +276,10 @@ class Case5Test(unittest.TestCase):
         model.pbess_loss["b1", 0].set_value(0.000125)
         self.assertAlmostEqual(pyo.value(model.bess_q_loss["b1", 0].body), 0.0)
 
-        model.qpv["pv1", 0].set_value(0.15)
-        model.ppv_loss["pv1", 0].set_value(0.00075)
-        self.assertAlmostEqual(pyo.value(model.pv_q_loss["pv1", 0].body), 0.0)
+        daylight = next(t for t in case.periods if case.pv[0].avail_kw.iloc[t] > 0)
+        model.qpv["pv1", daylight].set_value(0.15)
+        model.ppv_loss["pv1", daylight].set_value(0.00075)
+        self.assertAlmostEqual(pyo.value(model.pv_q_loss["pv1", daylight].body), 0.0)
 
         model.pch["b1", 0].set_value(0.0)
         model.pdis["b1", 0].set_value(0.0)

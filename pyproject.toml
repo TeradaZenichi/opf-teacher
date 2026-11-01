@@ -9,6 +9,8 @@ description = "Optimization teachers for balanced and unbalanced distribution OP
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "clarabel>=0.11,<0.12",
+    "numpy>=2,<3",
     "OpenDSSDirect.py>=0.9,<1",
     "pandas>=3,<4",
     "Pyomo>=6.10,<7",

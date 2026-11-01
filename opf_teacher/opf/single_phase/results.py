@@ -11,7 +11,7 @@ from opf_teacher.opf.single_phase.components import BessResult, BranchResult, Bu
 
 
 DEFAULT_SOCP_GAP_TOLERANCE = 1e-5
-RELATIVE_FLOW_FLOOR_PU2 = 1e-12
+RELATIVE_FLOW_FLOOR_KW = 1e-3
 
 
 def _val(x) -> float:
@@ -31,6 +31,7 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
     relative_flow_values = []
     current_error_values = []
     loss_error_values = []
+    flow_floor = case.base.pu_power(RELATIVE_FLOW_FLOOR_KW) ** 2
     for j in (bus for bus in case.buses if bus != case.root):
         branch = case.branches[case.parent_branch[j]]
         from_bus = case.buses[branch.from_bus]
@@ -48,8 +49,8 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
             voltage_current = voltage * current_squared
             flow_squared = _val(m.P[j, t]) ** 2 + _val(m.Q[j, t]) ** 2
             residual = voltage_current - flow_squared
-            scale = max(1.0, abs(voltage_current), abs(flow_squared))
-            exact_current_squared = flow_squared / max(voltage, RELATIVE_FLOW_FLOOR_PU2)
+            scale = max(case.base.pu_power(branch.s_max_kva) ** 2, abs(voltage_current), abs(flow_squared), flow_floor)
+            exact_current_squared = flow_squared / max(voltage, 1e-12)
             current_delta_a = abs(
                 math.sqrt(max(current_squared, 0.0))
                 - math.sqrt(max(exact_current_squared, 0.0))
@@ -57,7 +58,7 @@ def analyze_socp_gap(m, case: Case, tolerance: float = DEFAULT_SOCP_GAP_TOLERANC
             loss_delta_w = abs(case.base.to_kw(r_pu * (current_squared - exact_current_squared))) * 1e3
             gap_values.append(residual)
             normalized.append(abs(residual) / scale)
-            relative_flow.append(abs(residual) / max(abs(voltage_current), abs(flow_squared), RELATIVE_FLOW_FLOOR_PU2))
+            relative_flow.append(abs(residual) / max(abs(voltage_current), abs(flow_squared), flow_floor))
             current_error.append(current_delta_a)
             loss_error.append(loss_delta_w)
         per_branch[j] = {

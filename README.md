@@ -54,16 +54,17 @@ and installed from the sibling checkout for this package migration. Scenario inp
 come from `examples/`, and current outputs go to `results/`. Local `.old/`
 archives are ignored by Git and are not used by the active scripts.
 
-The SOCP formulation requires Gurobi or an equivalent compatible solver.
+Continuous SOCP cases use the included Clarabel solver on CPU. Cases with SOS
+constraints, including piecewise PV controls, use Gurobi and require its license.
 
 ## Running
 
-`main.py` solves the battery OPF over the full horizon for `examples/case5_local` using the
+`scripts/examples/main.py` solves the battery OPF over the full horizon for `examples/case5_local` using the
 active-power LinDistFlow formulation. It writes device, bus, branch and summary CSVs
 as `results/battery_opf_{devices,buses,branches,summary}.csv`.
 
 ```powershell
-.\.venv\Scripts\python.exe main.py
+.\.venv\Scripts\python.exe scripts/examples/main.py
 ```
 
 The script only optimizes and exports trajectories. It does not run an external
@@ -74,9 +75,9 @@ Change run parameters in the block at the top of each script:
 | Parameter | Meaning |
 |---|---|
 | `CASE_PATH` | Scenario directory under `examples/`. |
-| `FORMULATION` | `single_phase_active` or `single_phase_socp`; `train.py` also accepts `three_phase_ivr`. |
-| `OBSERVATION_MODE`, `DEVICE_ID` | `train.py`: central observations or a local view of the selected BESS. |
-| `RESULTS_PATH`, `OUTPUT_NAME` | Output directory and CSV prefix in `main.py`. |
+| `FORMULATION` | `single_phase_active` or `single_phase_socp`; `scripts/examples/train.py` also accepts `three_phase_ivr`. |
+| `OBSERVATION_MODE`, `DEVICE_ID` | `scripts/examples/train.py`: central observations or a local view of the selected BESS. |
+| `RESULTS_PATH`, `OUTPUT_NAME` | Output directory and CSV prefix in `scripts/examples/main.py`. |
 | `CSV_PATH` | Output CSV path in each `train` script. |
 | `WINDOW` | Positive number of observed states in each X. A longer window than the episode produces zero pairs. |
 
@@ -302,7 +303,7 @@ _, action = teacher.state_action()
 next_state, reward, terminated, truncated, info = env.step(action)
 ```
 
-`train.py` supports central and device-local observations for the balanced
+`scripts/examples/train.py` supports central and device-local observations for the balanced
 single-phase equivalent and the unbalanced three-phase model.
 
 Three-phase bus, BESS, PV, and action values are dictionaries indexed by
@@ -322,11 +323,11 @@ for discharging. Reactive power uses `q_kvar > 0` for injection and
 
 ## Teacher state-action pairs
 
-`train.py` generates X/Y pairs from an OpenDSS episode for any positive history
+`scripts/examples/train.py` generates X/Y pairs from an OpenDSS episode for any positive history
 window. Change `WINDOW` in the settings block at the top of the script:
 
 ```powershell
-.\.venv\Scripts\python.exe train.py
+.\.venv\Scripts\python.exe scripts/examples/train.py
 ```
 
 Install the `environment` extra in the same Python environment first.
@@ -358,7 +359,7 @@ library depends on the directory name `examples`. The environment's
 `episode_steps` still selects an episode length.
 
 The environment implementation lives in `opendss_environment/microgrid_env.py`
-inside its own repository, alongside its `main_env.py` example runner:
+inside its own repository. Its example runner is `scripts/examples/main_env.py`:
 
 ```python
 from opendss_environment import EnvironmentConfig, MicrogridEnv
@@ -446,8 +447,8 @@ The previous scripts remain available:
 
 | Script | Window | Pairs for the 24-period case | Output |
 |---|---|---|---|
-| `train-w1.py` | 1 | 24 | `results/train-w1.csv` |
-| `train-w3.py` | 3 | 22 | `results/train-w3.csv` |
+| `scripts/examples/train-w1.py` | 1 | 24 | `results/train-w1.csv` |
+| `scripts/examples/train-w3.py` | 3 | 22 | `results/train-w3.csv` |
 
 Each CSV row contains `timestamp`, chronological state columns `x.0.` (and
 `x.1.` and `x.2.` for window three), and the current teacher action under `y.`. Actions are
@@ -458,7 +459,7 @@ The timestamp string is row metadata. Each state in X contains numeric
 
 The training CSVs store powers in pu in both X and Y. Each CSV has a JSON with
 the same name containing the scenario, window, normalization bases and time encoding. Device
-commands are converted internally to kW/kvar for OpenDSS. The result CSVs from `main.py`
+commands are converted internally to kW/kvar for OpenDSS. The result CSVs from `scripts/examples/main.py`
 continue to use the physical units shown in their column names.
 
 `Teacher` uses the existing `Case`, `Bus`, `Bess`, `Pv`, and `Grid` objects.
@@ -533,9 +534,10 @@ learning model. Both central and local pairs already use pu. Local labels
 remain actions from a global optimization, not a
 separately optimized local policy.
 
-Only optimal/locally optimal solver terminations produce actions. This first
-interface does not certify AC feasibility, SOCP tightness, or replay equality;
-use the returned summary and an OpenDSS replay to accept training labels.
+Only optimal or locally optimal solver terminations produce actions. Single-phase SOCP
+results include scaled constraint checks and physical device diagnostics in
+`case.quality`. Use `case.quality["valid_for_imitation"]` to accept training
+labels, and verify execution through an OpenDSS replay.
 
 ## Per-unit training pairs
 
@@ -648,10 +650,21 @@ settings = SolveConfig(solver="appsi_highs")
 solved_case = teacher.solve(config=settings)
 ```
 
-`SolveConfig` includes `tee`, `socp_gap_tolerance`, `maxiter`, `ftol` and
-`solver_options` for Pyomo solver options. Legacy calls such as
+`SolveConfig` includes `tee`, `socp_gap_tolerance`, `quality_tolerance`, `maxiter`,
+`ftol` and backend-specific `solver_options`. Continuous SOCPs default to
+`clarabel`; models with SOS constraints default to `gurobi_direct`. An explicit
+`solver` selects the backend. Clarabel options use its native names, such as
+`time_limit` and `tol_feas`. Legacy calls such as
 `solve(solver="appsi_highs")` and `solve(maxiter=500)` remain supported, but cannot
 be combined with `config`.
+
+SOCP variables and constraints are normalized internally before optimization;
+solutions are mapped back to the original model. Public pu observations,
+actions, case bases, and physical result units retain their documented meaning.
+For convex buy/sell tariffs, a signed grid-power variable and cost epigraph
+avoid an import/export SOS1 restriction. Nonconvex tariffs retain that restriction.
+The solver result is checked before loading values; unsuccessful termination
+never produces a substitute action.
 
 Single-phase and three-phase cases have distinct contracts:
 
@@ -753,6 +766,17 @@ passes the configured criterion. `socp_tightness` is `tight`, `acceptable`, or
 gap relative to branch flow, current error in amperes, and equivalent loss
 error in watts.
 
+The normalized gap uses `max(s_max_pu^2, abs(v*l), P^2+Q^2)` as its reference.
+The relative-flow floor corresponds to 1 W. These references preserve the
+classification when only the per-unit power base changes.
+
+`case.quality` also reports inverter-loss underestimation in watts, BESS
+energy-balance and execution errors in Wh, PV availability violations, solver
+residuals, and `valid_for_imitation`. `quality_tolerance` defaults to `1e-6`
+in scaled model units; device-state consistency uses capacity/power fractions.
+SOCP feasibility, device consistency, and an acceptable branch-cone gap are
+all required for a valid imitation label.
+
 This is a numerical and physical tightness check, not a statistical
 probability. `socp_confidence` and `socp_confidence_margin` remain as aliases.
 
@@ -826,9 +850,11 @@ opf_teacher/
         |-- ivr_model.py    unbalanced AC-IVR
         |-- results.py      three-phase results
         `-- export.py       three-phase CSV export
-main.py                 battery OPF and CSV results
-train-w1.py             OpenDSS X/Y pairs, window 1
-train-w3.py             OpenDSS X/Y pairs, window 3
+scripts/examples/
+    |-- main.py         battery OPF and CSV results
+    |-- train.py        OpenDSS X/Y pairs, configurable window
+    |-- train-w1.py     OpenDSS X/Y pairs, window 1
+    `-- train-w3.py     OpenDSS X/Y pairs, window 3
 ```
 
 Use explicit formulation imports, for example

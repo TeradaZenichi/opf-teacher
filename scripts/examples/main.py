@@ -6,7 +6,7 @@ from opf_teacher.teacher import Teacher
 
 
 # Change the run settings here.
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 CASE_PATH = ROOT / "examples" / "case5_local"  # Input scenario.
 RESULTS_PATH = ROOT / "results"
 FORMULATION = "single_phase_active"  # Or single_phase_socp.

@@ -11,11 +11,11 @@ from opf_teacher.teacher import StateActionHistory, Teacher
 
 
 # Change the run settings here.
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 CASE_PATH = ROOT / "examples" / "case5_local"  # Input scenario.
-CSV_PATH = ROOT / "results" / "train-w1.csv"
+CSV_PATH = ROOT / "results" / "train-w3.csv"
 FORMULATION = "single_phase_active"  # Or single_phase_socp.
-WINDOW = 1  # Number of observed states in each X.
+WINDOW = 3  # Number of observed states in each X.
 
 
 def main():
@@ -37,7 +37,8 @@ def main():
         pair = history.append(state, action)
         observation, _, terminated, truncated, _ = env.step(action)
 
-        if pair is not None:
+        label_valid = solved.quality is None or solved.quality.get("valid_for_imitation", True)
+        if pair is not None and label_valid:
             states, current_action = pair
             state_history = {}
             for position, observed_state in enumerate(states):

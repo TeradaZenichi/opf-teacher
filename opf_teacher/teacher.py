@@ -18,6 +18,9 @@ from opf_teacher.opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_sour
 from opf_teacher.opf import three_phase
 from opf_teacher.opf.single_phase import components, data, states
 from opf_teacher.opf.single_phase import active_model, distflow_socp, results
+from opf_teacher.opf.single_phase.scaling import scale_model
+from opf_teacher.opf.single_phase.conic import ConicModel
+from opf_teacher.opf.single_phase.quality import analyze_quality
 
 
 @dataclass
@@ -30,6 +33,7 @@ class SolveConfig:
     maxiter: int = 300
     ftol: float = 1e-8
     solver_options: dict = field(default_factory=dict)
+    quality_tolerance: float = 1e-6
 
 
 class Teacher:
@@ -287,21 +291,39 @@ class Teacher:
         if solver is None:
             if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
                 solver = "appsi_highs"
+            elif not any(self.model.component_data_objects(pyo.SOSConstraint, active=True)):
+                solver = "clarabel"
             else:
                 solver = "gurobi_direct"
-        optimizer = pyo.SolverFactory(solver)
-        if optimizer is None or not optimizer.available(exception_flag=False):
-            raise RuntimeError(f"Solver '{solver}' unavailable")
-        for name, value in settings.solver_options.items():
-            optimizer.options[name] = value
-        solution = optimizer.solve(self.model, tee=settings.tee)
-        status = str(solution.solver.termination_condition)
-        if status.lower() not in {"optimal", "locallyoptimal"}:
-            raise RuntimeError(f"Teacher did not solve to optimality: {status}")
+        solver_model = self.model
+        if self.formulation is Formulation.SINGLE_PHASE_SOCP:
+            solver_model = scale_model(self.model, self.case)
+        if solver == "clarabel":
+            solver_info = ConicModel(solver_model).solve(settings)
+            status = solver_info["status"]
+        else:
+            optimizer = pyo.SolverFactory(solver)
+            if optimizer is None or not optimizer.available(exception_flag=False):
+                raise RuntimeError(f"Solver '{solver}' unavailable")
+            for name, value in settings.solver_options.items():
+                optimizer.options[name] = value
+            solution = optimizer.solve(solver_model, tee=settings.tee, load_solutions=False)
+            status = str(solution.solver.termination_condition)
+            if status.lower() not in {"optimal", "locallyoptimal"}:
+                message = getattr(solution.solver, "termination_message", "")
+                raise RuntimeError(f"Teacher did not solve to optimality: {status}. {message}")
+            solver_model.solutions.load_from(solution)
+            solver_info = {"name": solver, "status": status}
+        if solver_model is not self.model:
+            pyo.TransformationFactory("core.scale_model").propagate_solution(solver_model, self.model)
         if self.formulation is Formulation.SINGLE_PHASE_ACTIVE:
             active_model._attach_active_results(self.model, self.case, status)
         else:
             results.attach_results(self.model, self.case, status, socp_gap_tolerance=settings.socp_gap_tolerance)
+            self.case.quality = analyze_quality(self.model, self.case, settings.quality_tolerance)
+            self.case.quality["solver"] = solver_info
+            if not self.case.quality["feasible"]:
+                raise RuntimeError(f"Teacher solution violates scaled constraints: {self.case.quality['worst_constraint']}")
 
     def _solve_three_phase(self, settings: SolveConfig):
         if settings.solver not in {None, "scipy_slsqp", "slsqp"}:

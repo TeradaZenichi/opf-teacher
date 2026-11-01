@@ -25,6 +25,7 @@ class DistFlowModel:
             for bus_id in case.buses if bus_id != case.root
         }
         self.voltage_upper_limit = pv_droop.relaxes_voltage(case)
+        self.convex_grid = all(float(price) >= float(price) * case.grid.feed_in_ratio for price in case.price)
         self.model = None
 
     def build(self) -> pyo.ConcreteModel:
@@ -50,8 +51,15 @@ class DistFlowModel:
         model.P = pyo.Var(model.J, model.T)
         model.Q = pyo.Var(model.J, model.T)
         model.l = pyo.Var(model.J, model.T, domain=pyo.NonNegativeReals, bounds=self.branch_current_bounds)
-        model.pimp = pyo.Var(model.T, bounds=(0.0, self.base.pu_power(grid.p_import_max_kw)))
-        model.pexp = pyo.Var(model.T, bounds=(0.0, self.base.pu_power(grid.p_export_max_kw)))
+        if self.convex_grid:
+            model.pgrid = pyo.Var(model.T, bounds=(-self.base.pu_power(grid.p_export_max_kw), self.base.pu_power(grid.p_import_max_kw)))
+            model.pimp = pyo.Expression(model.T, rule=lambda m, t: pyo.Expr_if(IF=m.pgrid[t] >= 0, THEN=m.pgrid[t], ELSE=0.0))
+            model.pexp = pyo.Expression(model.T, rule=lambda m, t: pyo.Expr_if(IF=m.pgrid[t] <= 0, THEN=-m.pgrid[t], ELSE=0.0))
+            if grid.feed_in_ratio != 1.0:
+                model.cost_rate = pyo.Var(model.T)
+        else:
+            model.pimp = pyo.Var(model.T, bounds=(0.0, self.base.pu_power(grid.p_import_max_kw)))
+            model.pexp = pyo.Var(model.T, bounds=(0.0, self.base.pu_power(grid.p_export_max_kw)))
         reactive_limit = self.base.pu_power(grid.q_max_kvar)
         model.qgrid = pyo.Var(model.T, bounds=(-reactive_limit, reactive_limit))
         model.pch = pyo.Var(model.S, model.T, domain=pyo.NonNegativeReals, bounds=self.battery_charge_bounds)
@@ -107,11 +115,17 @@ class DistFlowModel:
         return 0.0, available
 
     def pv_reactive_bounds(self, model, pv_id, time):
-        limit = self.base.pu_power(self.pv[pv_id].s_max_kva)
+        pv = self.pv[pv_id]
+        if float(pv.avail_kw.iloc[time]) <= 0.0 and not pv.night_var:
+            return 0.0, 0.0
+        limit = self.base.pu_power(pv.s_max_kva)
         return -limit, limit
 
     def pv_loss_bounds(self, model, pv_id, time):
-        return 0.0, self.base.pu_power(self.pv[pv_id].q_loss_rated_kw)
+        pv = self.pv[pv_id]
+        if float(pv.avail_kw.iloc[time]) <= 0.0 and not pv.night_var:
+            return 0.0, 0.0
+        return 0.0, self.base.pu_power(pv.q_loss_rated_kw)
 
     def pv_grid_consumption_rule(self, model, pv_id, time):
         pv = self.pv[pv_id]
@@ -132,7 +146,7 @@ class DistFlowModel:
             if pv.bus == bus_id:
                 injection += model.ppv_net[pv.id, time]
         if bus_id == self.case.root:
-            injection += model.pimp[time] - model.pexp[time]
+            injection += model.pgrid[time] if self.convex_grid else model.pimp[time] - model.pexp[time]
         return injection
 
     def reactive_injection(self, model, bus_id, time):
@@ -168,7 +182,11 @@ class DistFlowModel:
         model.socp = pyo.Constraint(model.J, model.T, rule=self.branch_cone_rule)
         model.soc_balance = pyo.Constraint(model.S, model.T, rule=self.battery_energy_rule)
         model.soc_terminal = pyo.Constraint(model.S, rule=self.battery_terminal_rule)
-        model.no_roundtrip = pyo.SOSConstraint(model.T, rule=self.grid_exchange_rule, sos=1)
+        if not self.convex_grid:
+            model.no_roundtrip = pyo.SOSConstraint(model.T, rule=self.grid_exchange_rule, sos=1)
+        elif self.case.grid.feed_in_ratio != 1.0:
+            model.buy_cost = pyo.Constraint(model.T, rule=lambda m, t: m.cost_rate[t] >= float(self.case.price.iloc[t]) * m.pgrid[t])
+            model.sell_cost = pyo.Constraint(model.T, rule=lambda m, t: m.cost_rate[t] >= float(self.case.price.iloc[t]) * self.case.grid.feed_in_ratio * m.pgrid[t])
 
     def active_balance_rule(self, model, bus_id, time):
         outgoing = sum(model.P[child, time] for child in self.case.children.get(bus_id, []))
@@ -273,6 +291,10 @@ class DistFlowModel:
         model.cost = pyo.Objective(rule=self.energy_cost_rule, sense=pyo.minimize)
 
     def energy_cost_rule(self, model):
+        if self.convex_grid and self.case.grid.feed_in_ratio == 1.0:
+            return self.base.s_base_kva * self.case.dt_h * sum(float(self.case.price.iloc[t]) * model.pgrid[t] for t in model.T)
+        if self.convex_grid:
+            return self.base.s_base_kva * self.case.dt_h * sum(model.cost_rate[t] for t in model.T)
         return self.base.s_base_kva * self.case.dt_h * sum(
             float(self.case.price.iloc[time]) * (model.pimp[time] - self.case.grid.feed_in_ratio * model.pexp[time])
             for time in model.T

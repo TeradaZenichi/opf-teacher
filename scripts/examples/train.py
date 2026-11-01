@@ -10,7 +10,7 @@ from opf_teacher.teacher import PairSelector, StateActionHistory, Teacher
 
 
 # Change the run settings here.
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 CASE_PATH = ROOT / "examples" / "case5_local"  # Input scenario.
 CSV_PATH = ROOT / "results" / "train.csv"
 # single_phase_active: active-power single-phase equivalent.
@@ -39,7 +39,7 @@ def main(window=WINDOW):
         teacher = Teacher(horizon, formulation=FORMULATION)
         teacher.observe_dict(observation)
         teacher.build()
-        teacher.solve()
+        solved = teacher.solve()
         state, action = teacher.state_action()
         selected_state, selected_action = selector.select(state, action)
         selected_state["time"] = time_encoder.encode(selected_state.pop("timestamp"))
@@ -47,7 +47,8 @@ def main(window=WINDOW):
         pair = history.append(selected_state, selected_action)
         observation, _, terminated, truncated, _ = env.step(action)
 
-        if pair is not None:
+        label_valid = solved.quality is None or solved.quality.get("valid_for_imitation", True)
+        if pair is not None and label_valid:
             states, current_action = pair
             state_history = {}
             for position, observed_state in enumerate(states):
