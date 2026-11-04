@@ -51,7 +51,8 @@ python -m pip install -e ".[highs,environment]"
 The environment is developed in its
 [own repository](https://github.com/TeradaZenichi/powerflow-opendss-environment)
 and installed from the sibling checkout for this package migration. Scenario inputs
-come from `examples/`, and current outputs go to `results/`. Local `.old/`
+come from `examples/`, and generated outputs go to the ignored `results/`
+directory. Run the examples to recreate them. Local `.old/`
 archives are ignored by Git and are not used by the active scripts.
 
 Continuous SOCP cases use the included Clarabel solver on CPU. Cases with SOS
@@ -78,7 +79,7 @@ Change run parameters in the block at the top of each script:
 | `FORMULATION` | `single_phase_active` or `single_phase_socp`; `scripts/examples/train.py` also accepts `three_phase_ivr`. |
 | `OBSERVATION_MODE`, `DEVICE_ID` | `scripts/examples/train.py`: central observations or a local view of the selected BESS. |
 | `RESULTS_PATH`, `OUTPUT_NAME` | Output directory and CSV prefix in `scripts/examples/main.py`. |
-| `CSV_PATH` | Output CSV path in each `train` script. |
+| `CSV_PATH` | Output CSV path in `scripts/examples/train.py`; a JSON with the same stem stores metadata. |
 | `WINDOW` | Positive number of observed states in each X. A longer window than the episode produces zero pairs. |
 
 The scenario's CSV timestamps define the number of periods and their duration.
@@ -321,7 +322,58 @@ The BESS sign convention is `p_net_kw > 0` for charging and `p_net_kw < 0`
 for discharging. Reactive power uses `q_kvar > 0` for injection and
 `q_kvar < 0` for absorption.
 
-## Teacher state-action pairs
+## Offline supervised pairs
+
+Use the same collector for single-phase or three-phase cases, local or central
+observations, and histories of any positive length. It does not require the
+environment or a learning framework:
+
+```python
+from opf_teacher import PairConfig, collect_pairs
+
+config = PairConfig(formulation="single_phase_socp", mode="local",
+                    device_id="b1", window=3, horizon=96)
+x, y = collect_pairs("examples/case5_local", config)
+```
+
+| Setting | Options |
+|---|---|
+| `formulation` | `single_phase_socp`, `single_phase_active`, `three_phase_ivr`; inferred from a source file's configuration or the case type when omitted. |
+| `mode` | `central`: all buses/devices; `local`: the selected BESS and its bus, with its label from the global OPF. |
+| `window` | `1`: one current observation; greater than one: chronological observation history. |
+| `horizon` | Maximum lookahead in intervals; `None` uses all remaining periods. |
+| `action_history` | `False`: current action; `True`: actions aligned with every state in the window. |
+| `solve` | A `SolveConfig` with solver settings. |
+
+The return values are two lists of named dictionaries in pu. Each `x[i]` is
+always a list of `window` observations, including when `window=1`. By default,
+`y[i]` is only the action at the last observation's timestamp. With
+`action_history=True`, `y[i]` is an equally long action sequence; this supports
+trajectory models while preserving the default many-observations/one-action
+contract. Three-phase values retain their phase keys and `phase_order`, and
+each BESS keeps one shared SoC. No flattening, tensor conversion or time
+encoding is imposed on the caller.
+
+Collection advances the first predicted action and SoC at each interval.
+Pre-action voltages use current loads and held device powers, with PV
+generation capped by current availability; this is a fixed-power snapshot,
+without integrating energy or simulating autonomous PV control between
+decisions. Initial device powers are zero. Future loads are optimization
+forecasts, never historical observations. The horizon shrinks at the selected
+case's end; select a case slice with `case.horizon(start, periods)` first to
+keep training and validation forecasts disjoint. The source case is unchanged.
+
+Windows are returned only after warm-up. Invalid imitation labels are
+excluded; action-sequence targets require every label in their window to be
+valid. Collection raises `ValueError` if no valid full window remains.
+The three-phase solver retains its local-feasible solution semantics and does
+not provide a global-optimality certificate.
+
+For custom pairing or quality diagnostics, `rollout(source, config)` yields
+each solved `Teacher`. The existing `observe()`, `state_action()`,
+`PairSelector`, `StateActionHistory` and `TemporalTeacher` APIs remain available.
+
+## Environment-based state-action pairs
 
 `scripts/examples/train.py` generates X/Y pairs from an OpenDSS episode for any positive history
 window. Change `WINDOW` in the settings block at the top of the script:
@@ -397,7 +449,8 @@ The environment remains independent of OPF formulations and learning code.
 The outputs are `results/train.csv` and `results/train.json`. The JSON records
 the scenario, formulation, observation mode, selected BESS/bus, window, phase order, number of pairs, bases and time
 encoding. Phase order stays in this metadata so the columns under X remain
-numeric. You can also import the script and call `main(window=5)`.
+numeric. You can also import the script and call
+`main(window=5, output="results/train-w5.csv")`.
 
 The formulation and observation scope are independent settings:
 
@@ -443,16 +496,23 @@ The first `WINDOW - 1` steps collect history while still executing the teacher
 actions. A window longer than the episode writes a CSV with only its header
 and records zero pairs in the JSON.
 
-The previous scripts remain available:
+Use the same script for single-state and three-state datasets. From the
+repository root, these calls recreate the previous CSV names and their JSON
+metadata:
 
-| Script | Window | Pairs for the 24-period case | Output |
-|---|---|---|---|
-| `scripts/examples/train-w1.py` | 1 | 24 | `results/train-w1.csv` |
-| `scripts/examples/train-w3.py` | 3 | 22 | `results/train-w3.csv` |
+```python
+from scripts.examples.train import main
+
+main(window=1, output="results/train-w1.csv")
+main(window=3, output="results/train-w3.csv")
+```
+
+For direct script execution, change `WINDOW` and `CSV_PATH` in the settings
+block. Its `__main__` block passes both settings explicitly.
 
 Each CSV row contains `timestamp`, chronological state columns `x.0.` (and
 `x.1.` and `x.2.` for window three), and the current teacher action under `y.`. Actions are
-executed during warm-up as well. These scripts generate labels, not fitted
+executed during warm-up as well. The script generates labels, not fitted
 learning models. Forecast trajectories do not populate the observed history.
 The timestamp string is row metadata. Each state in X contains numeric
 `time.hour_sin` and `time.hour_cos` features for its own observation time.
@@ -687,7 +747,9 @@ Use one instance per episode and controller; local devices need separate histori
 The default `window=1` returns `([current_state], current_action)` immediately.
 Larger windows return `([past_states, ..., current_state], current_action)` after
 collecting enough observations. The state input is always a list, even with
-window one; the action target always belongs to the current step.
+window one; by default the action target belongs to the current step.
+With `action_history=True`, the target is instead an aligned list of actions,
+one for each state in the window. `reset()` clears both histories.
 
 ```python
 from opf_teacher.teacher import StateActionHistory
@@ -852,9 +914,7 @@ opf_teacher/
         `-- export.py       three-phase CSV export
 scripts/examples/
     |-- main.py         battery OPF and CSV results
-    |-- train.py        OpenDSS X/Y pairs, configurable window
-    |-- train-w1.py     OpenDSS X/Y pairs, window 1
-    `-- train-w3.py     OpenDSS X/Y pairs, window 3
+    `-- train.py        OpenDSS X/Y pairs, configurable window and output
 ```
 
 Use explicit formulation imports, for example

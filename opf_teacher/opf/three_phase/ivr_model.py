@@ -16,6 +16,7 @@ from opf_teacher.opf.common import (
 )
 from opf_teacher.opf.three_phase.components import Case
 from opf_teacher.opf.three_phase.results import attach_results
+from opf_teacher.opf.three_phase.states import BusState
 
 
 @dataclass
@@ -230,6 +231,41 @@ class IVRModel:
                 dtype=complex,
             )
         raise ValueError("Delta branches require exactly three phases")
+
+    def pre_action_buses(self, bess, pv):
+        """Measure held device powers at the first interval without changing SoC."""
+        consumption = self.load_kva[0].copy()
+        delta = []
+        for kind, devices, observed in (("bess", self.case.bess, bess), ("pv", self.case.pv, pv)):
+            for device in devices:
+                state = observed[device.id]
+                phases = device.connection.phases
+                active = dict(state.previous_p_kw)
+                reactive = state.previous_q_kvar
+                if kind == "pv":
+                    if device.connection.dispatch_mode == "aggregate":
+                        generation = min(sum(active.values()), sum(state.available_kw.values())) / len(phases)
+                        active = dict.fromkeys(phases, generation)
+                    else:
+                        active = {phase: min(active[phase], state.available_kw[phase]) for phase in phases}
+                powers = [complex(active[phase] if kind == "bess" else -active[phase], -reactive[phase])
+                          for phase in phases]
+                if device.connection.connection == "delta":
+                    delta.append((device.connection, powers))
+                else:
+                    for phase, power in zip(phases, powers):
+                        consumption[self.node_position[(device.connection.bus, phase)]] += power
+        voltage, _, _, _ = self._power_flow((consumption, delta), self.nominal_voltage)
+        buses = {}
+        for bus_id, bus in self.case.buses.items():
+            values = {phase: voltage[self.node_position[(bus_id, phase)]] for phase in bus.phases}
+            buses[bus_id] = BusState(
+                {phase: float(abs(value) / bus.kv_base_ln) for phase, value in values.items()},
+                {phase: float(np.angle(value, deg=True)) for phase, value in values.items()},
+                {phase: float(bus.p_load_kw[phase].iloc[0]) for phase in bus.phases},
+                {phase: float(bus.q_load_kvar[phase].iloc[0]) for phase in bus.phases},
+            )
+        return buses
 
     def solve(self, *, tee=False, maxiter=300, ftol=1e-8) -> Case:
         case = self.case

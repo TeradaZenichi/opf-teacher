@@ -21,6 +21,7 @@ gurobi.lic
 .old/
 
 # Resultados/temporarios
+results/
 *.lp
 *.mps
 figures/

@@ -25,7 +25,8 @@ DEVICE_ID = "b1"  # BESS selected in local mode; ignored in central mode.
 WINDOW = 3  # Number of observed states in each X.
 
 
-def main(window=WINDOW):
+def main(window=WINDOW, output=CSV_PATH):
+    output = Path(output)
     history = StateActionHistory(window=window)
     original_case = Teacher(CASE_PATH, formulation=FORMULATION).case
     selector = PairSelector(original_case, OBSERVATION_MODE, DEVICE_ID)
@@ -61,8 +62,8 @@ def main(window=WINDOW):
     table = pd.json_normalize(rows)
     if table.empty:
         table = pd.DataFrame(columns=["timestamp"])
-    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    table.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output, index=False, encoding="utf-8-sig")
     metadata = {
         "case": original_case.name, "formulation": FORMULATION,
         "observation": selector.as_dict(),
@@ -70,10 +71,10 @@ def main(window=WINDOW):
         "phase_order": state.get("phase_order", ["a"]),
         "normalization": normalizer.as_dict(), "time_encoding": time_encoder.as_dict(),
     }
-    CSV_PATH.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    print(f"{len(table)} pairs saved to: {CSV_PATH} (window={window})")
+    output.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    print(f"{len(table)} pairs saved to: {output} (window={window})")
     return table
 
 
 if __name__ == "__main__":
-    main()
+    main(window=WINDOW, output=CSV_PATH)

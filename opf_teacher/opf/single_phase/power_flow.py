@@ -1,4 +1,21 @@
 """Radial series-impedance snapshots with fixed complex power consumption."""
+from opf_teacher.opf.single_phase.states import BusState
+
+
+def pre_action_buses(case, bess, pv):
+    """Observe current demand with held commands, without integrating energy."""
+    buses = {bid: BusState(case.grid.v_ref_pu, float(bus.p_load_kw.iloc[0]),
+                           float(bus.q_load_kw.iloc[0])) for bid, bus in case.buses.items()}
+    power = {bid: complex(state.p_load_kw, state.q_load_kvar) for bid, state in buses.items()}
+    for device in case.bess:
+        state = bess[device.id]
+        power[device.bus] += complex(state.previous_p_kw, -state.previous_q_kvar)
+    for device in case.pv:
+        state = pv[device.id]
+        power[device.bus] -= complex(min(state.previous_p_kw, state.available_kw), state.previous_q_kvar)
+    for bid, voltage in bus_voltages(case, power).items():
+        buses[bid].v_before_pu = voltage
+    return buses
 
 
 def bus_voltages(case, power_kw):

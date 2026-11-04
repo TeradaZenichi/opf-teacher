@@ -483,26 +483,27 @@ class StateActionHistory:
     """Collect observed states and pair them with the current action.
 
     A window of one returns the current state in a one-item list.
+    action_history=True also returns the action paired with each state.
     Use one history per episode and controller.
     """
 
-    def __init__(self, window: int = 1):
+    def __init__(self, window: int = 1, action_history: bool = False):
         if isinstance(window, bool) or not isinstance(window, int) or window < 1:
             raise ValueError("window must be a positive integer")
         self._history = deque(maxlen=window)
+        self.action_history = action_history
 
     @property
     def window(self):
         return self._history.maxlen
 
-    def append(self, state: dict, action: dict) -> tuple[list[dict], dict] | None:
-        """Append one observed step; return None until the window is full."""
-        self._history.append(deepcopy(state))
+    def append(self, state: dict, action: dict) -> tuple[list[dict], dict | list[dict]] | None:
+        """Return a state window and either the current action or aligned actions."""
+        self._history.append((deepcopy(state), deepcopy(action)))
         if len(self._history) < self.window:
             return None
-        states = deepcopy(list(self._history))
-        current_action = deepcopy(action)
-        return states, current_action
+        states, actions = zip(*deepcopy(self._history))
+        return list(states), list(actions) if self.action_history else actions[-1]
 
     def reset(self):
         self._history.clear()
