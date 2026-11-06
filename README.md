@@ -39,11 +39,11 @@ from opf_teacher.opf.single_phase import load_case
 top-level `teacher`, `normalization`, and `opf` modules under `opf_teacher`.
 Update external imports and reinstall the editable project after this migration.
 
-For the active-power training scripts, install the environment and HiGHS extras
+For the active-power training example, install the HiGHS extra
 from this repository's root:
 
 ```powershell
-python -m pip install -e ".[highs,environment]"
+python -m pip install -e ".[highs]"
 ```
 
 `requirements.txt` also includes the environment. Install this project with
@@ -80,7 +80,7 @@ Change run parameters in the block at the top of each script:
 | `OBSERVATION_MODE`, `DEVICE_ID` | `scripts/examples/train.py`: central observations or a local view of the selected BESS. |
 | `RESULTS_PATH`, `OUTPUT_NAME` | Output directory and CSV prefix in `scripts/examples/main.py`. |
 | `CSV_PATH` | Output CSV path in `scripts/examples/train.py`; a JSON with the same stem stores metadata. |
-| `WINDOW` | Positive number of observed states in each X. A longer window than the episode produces zero pairs. |
+| `WINDOW` | Positive number of states in each X. A window longer than the selected period raises `ValueError`. |
 
 The scenario's CSV timestamps define the number of periods and their duration.
 Change demand and prices in `demand.csv` and `price.csv`, battery parameters in
@@ -331,8 +331,7 @@ environment or a learning framework:
 ```python
 from opf_teacher import PairConfig, collect_pairs
 
-config = PairConfig(formulation="single_phase_socp", mode="local",
-                    device_id="b1", window=3, horizon=96)
+config = PairConfig(formulation="single_phase_socp", mode="local", device_id="b1", window=3)
 x, y = collect_pairs("examples/case5_local", config)
 ```
 
@@ -340,13 +339,14 @@ x, y = collect_pairs("examples/case5_local", config)
 |---|---|
 | `formulation` | `single_phase_socp`, `single_phase_active`, `three_phase_ivr`; inferred from a source file's configuration or the case type when omitted. |
 | `mode` | `central`: all buses/devices; `local`: the selected BESS and its bus, with its label from the global OPF. |
-| `window` | `1`: one current observation; greater than one: chronological observation history. |
-| `horizon` | Maximum lookahead in intervals; `None` uses all remaining periods. |
+| `window` | `None`: flat state/action trajectory; `1`: one-state windows; greater than one: chronological observation windows. |
 | `action_history` | `False`: current action; `True`: actions aligned with every state in the window. |
 | `solve` | A `SolveConfig` with solver settings. |
+| `block_weeks` | `None` (default): solve the selected case once; a positive integer: solve consecutive blocks of that many weeks. |
+| `pad_initial` | `False` (default): wait for a complete window; `True`: repeat the first observation to fill missing initial history. Ignored with `window=None`. |
 
 The return values are two lists of named dictionaries in pu. Each `x[i]` is
-always a list of `window` observations, including when `window=1`. By default,
+a list of `window` observations when a window is set, including when `window=1`. By default,
 `y[i]` is only the action at the last observation's timestamp. With
 `action_history=True`, `y[i]` is an equally long action sequence; this supports
 trajectory models while preserving the default many-observations/one-action
@@ -354,38 +354,76 @@ contract. Three-phase values retain their phase keys and `phase_order`, and
 each BESS keeps one shared SoC. No flattening, tensor conversion or time
 encoding is imposed on the caller.
 
-Collection advances the first predicted action and SoC at each interval.
+For a single optimization and a flat trajectory, use:
+
+```python
+config = PairConfig(mode="local", device_id="b1", window=None)
+x, y = collect_pairs(case, config)  # [x0, x1, x2, ...], [y0, y1, y2, ...]
+```
+
+Setting `window=3` instead returns `[[x0, x1, x2], [x1, x2, x3], ...]`
+and `[y2, y3, ...]`. Adding `action_history=True` returns aligned action
+windows instead. With `pad_initial=True`, the initial X windows are
+`[x0, x0, x0]`, `[x0, x0, x1]`, then `[x0, x1, x2]`, paired with
+`y0`, `y1`, `y2`. Padded observations are independent copies. For
+`action_history=True`, missing past action labels are `None` (for example,
+`[None, None, y0]`), not copies of the current target; sequence models must mask
+those missing actions. Padding applies only at episode start, not block boundaries.
+With `window=None`, both outputs stay flat regardless of
+`action_history`. By default, each collector call performs one optimization over
+the complete selected case. `PairConfig` no longer has `horizon` or `solve_once`
+options, and the former rolling `rollout` export has been removed.
+
+To limit optimization size, use `PairConfig(block_weeks=1, ...)` for consecutive
+one-week blocks. Each week means 168 elapsed hours; the duration must contain a
+whole number of case intervals. The last block keeps all remaining intervals,
+even if shorter. SoC, previous BESS/PV commands and the observation history carry
+across block boundaries, including windows that span two blocks. Only the last
+block enforces the original terminal SoC target; intermediate blocks have no
+terminal target. A short final block must still be able to reach that target.
+Each solved block is checked for imitation quality and its optimization model
+is released before the next block. This bounds optimization size, but the returned
+observation lists and windows are still accumulated in memory. `window=None`
+avoids duplicating observation histories. Blockwise solutions need not equal the
+optimum of one full-period optimization.
+
+Collection reconstructs pre-action voltages with current loads
+and preceding planned commands, not with the current target action. SoC is
+taken from the preceding interval of the optimized trajectory. It uses
+perfect profiles over the current optimization period or block; its labels can differ
+from a controller that reoptimizes with a shorter rolling horizon. These
+are model-generated observations, not measurements from an environment.
+
 Pre-action voltages use current loads and held device powers, with PV
 generation capped by current availability; this is a fixed-power snapshot,
 without integrating energy or simulating autonomous PV control between
-decisions. Initial device powers are zero. Future loads are optimization
-forecasts, never historical observations. The horizon shrinks at the selected
-case's end; select a case slice with `case.horizon(start, periods)` first to
-keep training and validation forecasts disjoint. The source case is unchanged.
+decisions. Initial device powers are zero. Select a case slice with
+`case.horizon(start, periods)` before collecting to keep optimization profiles
+inside the intended dataset partition. The source case is unchanged.
 
-Windows are returned only after warm-up. Invalid imitation labels are
-excluded; action-sequence targets require every label in their window to be
-valid. Collection raises `ValueError` if no valid full window remains.
+Unless `pad_initial=True`, windows are returned only after the initial warm-up. Collection checks solution quality
+once per optimization before generating its pairs and raises `ValueError` if the solution is
+invalid for imitation or an unpadded selected period cannot fill the observation window.
 The three-phase solver retains its local-feasible solution semantics and does
 not provide a global-optimality certificate.
 
-For custom pairing or quality diagnostics, `rollout(source, config)` yields
-each solved `Teacher`. The existing `observe()`, `state_action()`,
+The existing `Teacher.solve()`, `observe()`, `state_action()`, `Case.horizon()`,
 `PairSelector`, `StateActionHistory` and `TemporalTeacher` APIs remain available.
+An external MPC controller can still observe, solve a horizon and apply its first
+action independently of offline pair collection.
 
-## Environment-based state-action pairs
+## Training example and environment integration
 
-`scripts/examples/train.py` generates X/Y pairs from an OpenDSS episode for any positive history
-window. Change `WINDOW` in the settings block at the top of the script:
+`scripts/examples/train.py` generates X/Y pairs from one optimized trajectory,
+encodes time and exports a CSV with metadata. Change `WINDOW` in its settings:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/examples/train.py
 ```
 
-Install the `environment` extra in the same Python environment first.
-The default settings use `case5_local` (one battery, no PV), solve the
-active-power teacher at every step and execute its first action in OpenDSS.
-Observed states include the resulting SoC and previously applied device powers.
+The default settings use `case5_local` (one battery, no PV) and solve the
+active-power teacher once. Reconstructed states include pre-action voltages,
+SoC and previous device powers. The example does not execute an environment.
 Set `CASE_PATH` and `FORMULATION` together when selecting another scenario;
 the script also accepts SOCP and three-phase cases.
 
@@ -400,8 +438,8 @@ action; the other step measurements describe the executed snapshot.
 The environment and teacher use the same standalone `pu-normalizer` package.
 Their public observations, X/Y pairs and step power measurements use pu.
 Conversions to physical powers happen internally at the OPF/OpenDSS boundary.
-The training script only selects the local/central view and encodes time before
-adding X/Y to the history. Pass the teacher or NN action directly to `env.step()`.
+For closed-loop evaluation, install the `environment` extra. Pass the teacher
+or NN action directly to `env.step()`.
 `env.normalizer.denormalize(info)` provides physical powers for reports when needed.
 
 An integration repository can keep the shared scenario under `data/case5/`
@@ -473,8 +511,8 @@ builds this view from the central pair, using the same global OPF label.
 The timestamp and phase order remain metadata; the training script encodes
 the time before adding the selected state to the history.
 
-Both modes solve the complete OPF and execute every device's action
-in OpenDSS, including during warm-up. The selection changes only the exported
+Both modes use the same complete OPF solution and reconstruct its trajectory.
+The selection changes only the exported
 pairs. Single-phase pairs use scalars, three-phase powers/voltages keep their
 phase keys, and each battery keeps one scalar SoC.
 
@@ -482,7 +520,7 @@ Central CSV targets use names such as `y.bess.b1.p_net_pu`. Local CSV targets
 use `y.p_net_pu`; local inputs use `x.0.bus.*` and `x.0.device.*` instead of the
 central `x.0.buses.<id>.*` and `x.0.bess.<id>.*` paths.
 
-An episode with N periods produces `max(0, N - WINDOW + 1)` pairs:
+With complete windows, an episode with `N >= WINDOW` produces `N - WINDOW + 1` pairs:
 
 | Window | Pairs for the 24-period case |
 |---|---|
@@ -490,11 +528,10 @@ An episode with N periods produces `max(0, N - WINDOW + 1)` pairs:
 | 3 | 22 |
 | 5 | 20 |
 | 24 | 1 |
-| 25 | 0 |
+| 25 | `ValueError` |
 
-The first `WINDOW - 1` steps collect history while still executing the teacher
-actions. A window longer than the episode writes a CSV with only its header
-and records zero pairs in the JSON.
+The example uses complete windows without initial padding. The first `WINDOW - 1`
+steps collect history; a window longer than the selected period raises `ValueError`.
 
 Use the same script for single-state and three-state datasets. From the
 repository root, these calls recreate the previous CSV names and their JSON
@@ -511,9 +548,9 @@ For direct script execution, change `WINDOW` and `CSV_PATH` in the settings
 block. Its `__main__` block passes both settings explicitly.
 
 Each CSV row contains `timestamp`, chronological state columns `x.0.` (and
-`x.1.` and `x.2.` for window three), and the current teacher action under `y.`. Actions are
-executed during warm-up as well. The script generates labels, not fitted
-learning models. Forecast trajectories do not populate the observed history.
+`x.1.` and `x.2.` for window three), and the current teacher action under `y.`.
+The script generates labels, not fitted learning models; observations are
+reconstructed chronologically from the optimized trajectory.
 The timestamp string is row metadata. Each state in X contains numeric
 `time.hour_sin` and `time.hour_cos` features for its own observation time.
 
@@ -768,7 +805,9 @@ if pair is not None:
 history.reset()
 ```
 
-The first `window - 1` calls return `None`. Returned pairs are independent
+The first `window - 1` calls return `None` unless `pad_initial=True`, which repeats
+the first observation and returns a pair immediately. Missing action-history
+labels are `None` and must be masked by sequence models. Returned pairs are independent
 copies. The caller supplies observations in chronological order at the chosen
 sampling interval; the class does not check timestamps or advance the environment.
 Do not fill the window with the OPF's predicted future trajectory.

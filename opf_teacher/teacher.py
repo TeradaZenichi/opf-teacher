@@ -13,7 +13,7 @@ import pandas as pd
 
 from opf_teacher.normalization import PUNormalizer
 from opf_teacher.opf.formulations import Formulation, parse_formulation
-from opf_teacher.opf.common import OBSERVATION_SCHEMA_VERSION, resolve_case_source
+from opf_teacher.opf.common import OBSERVATION_SCHEMA_VERSION, SOC_TOLERANCE, profile_value, resolve_case_source
 
 from opf_teacher.opf import three_phase
 from opf_teacher.opf.single_phase import components, data, states
@@ -88,63 +88,42 @@ class Teacher:
         Voltage is a pre-action feature, not an OPF constraint. Supply a new
         case to advance the horizon.
         """
-        if self.formulation is Formulation.THREE_PHASE_IVR:
-            return self._observe_three_phase(buses=buses, bess=bess, pv=pv)
-
         case = self.case
-        self._validate_observations(buses, bess, pv)
+        is_three_phase = self.formulation is Formulation.THREE_PHASE_IVR
+        if is_three_phase:
+            self._validate_three_phase_observations(buses, bess, pv)
+        else:
+            self._validate_observations(buses, bess, pv)
         price = float(case.price.iloc[0])
-
         for bid, bus in case.buses.items():
             bus.state = deepcopy(buses[bid])
-            bus.p_load_kw = bus.p_load_kw.astype(float)
-            bus.q_load_kw = bus.q_load_kw.astype(float)
-            bus.p_load_kw.iloc[0] = bus.state.p_load_kw
-            bus.q_load_kw.iloc[0] = bus.state.q_load_kvar
-        for device in case.bess:
-            device.state = deepcopy(bess[device.id])
-            # A new measured SoC must not move the terminal target.
-            if device.cyclic_soc and device.soc_terminal_frac is None:
-                device.soc_terminal_frac = device.soc_init_frac
-            device.soc_init_frac = device.state.soc_before_frac
-        for device in case.pv:
-            device.state = deepcopy(pv[device.id])
-            device.avail_kw = device.avail_kw.astype(float)
-            device.avail_kw.iloc[0] = device.state.available_kw
-        case.grid.state = states.GridState(price, price * case.grid.feed_in_ratio)
-        self.model = None
-        self._clear_results()
-        return self
-
-    def _observe_three_phase(self, *, buses, bess, pv):
-        case = self.case
-        self._validate_three_phase_observations(buses, bess, pv)
-        price = float(case.price.iloc[0])
-
-        for bus_id, bus in case.buses.items():
-            bus.state = deepcopy(buses[bus_id])
-            for phase in bus.phases:
-                bus.p_load_kw[phase].iloc[0] = bus.state.p_load_kw[phase]
-                bus.q_load_kvar[phase].iloc[0] = bus.state.q_load_kvar[phase]
+            if is_three_phase:
+                for phase in bus.phases:
+                    bus.p_load_kw[phase].iloc[0] = bus.state.p_load_kw[phase]
+                    bus.q_load_kvar[phase].iloc[0] = bus.state.q_load_kvar[phase]
+            else:
+                bus.p_load_kw = bus.p_load_kw.astype(float)
+                bus.q_load_kw = bus.q_load_kw.astype(float)
+                bus.p_load_kw.iloc[0] = bus.state.p_load_kw
+                bus.q_load_kw.iloc[0] = bus.state.q_load_kvar
         for connected in case.bess:
             connected.state = deepcopy(bess[connected.id])
-            device = connected.device
+            device = connected.device if is_three_phase else connected
+            # A new measured SoC must not move the terminal target.
             if device.cyclic_soc and device.soc_terminal_frac is None:
                 device.soc_terminal_frac = device.soc_init_frac
             device.soc_init_frac = connected.state.soc_before_frac
         for connected in case.pv:
             connected.state = deepcopy(pv[connected.id])
-            for phase in connected.connection.phases:
-                connected.available_kw[phase].iloc[0] = (
-                    connected.state.available_kw[phase]
-                )
-            connected.device.avail_kw.iloc[0] = sum(
-                connected.state.available_kw.values()
-            )
-        case.grid.state = three_phase.states.GridState(
-            price,
-            price * case.grid.feed_in_ratio,
-        )
+            if is_three_phase:
+                for phase in connected.connection.phases:
+                    connected.available_kw[phase].iloc[0] = connected.state.available_kw[phase]
+                connected.device.avail_kw.iloc[0] = sum(connected.state.available_kw.values())
+            else:
+                connected.avail_kw = connected.avail_kw.astype(float)
+                connected.avail_kw.iloc[0] = connected.state.available_kw
+        state_types = three_phase.states if is_three_phase else states
+        case.grid.state = state_types.GridState(price, price * case.grid.feed_in_ratio)
         self.model = None
         self._clear_results()
         return self
@@ -275,10 +254,9 @@ class Teacher:
         self._clear_results()
         if self.formulation is Formulation.THREE_PHASE_IVR:
             self._solve_three_phase(settings)
-            self._set_three_phase_actions()
         else:
             self._solve_single_phase(settings)
-            self._set_single_phase_actions()
+        self._set_actions()
         return self.case
 
     def state_action(self):
@@ -332,31 +310,17 @@ class Teacher:
             raise ValueError("Use maxiter and ftol for the three-phase solver")
         self.model.solve(tee=settings.tee, maxiter=settings.maxiter, ftol=settings.ftol)
 
-    def _set_single_phase_actions(self):
-        for device in self.case.bess:
-            power = float(device.result.p_net_kw.iloc[0])
-            reactive_power = float(device.result.q_kvar.iloc[0])
-            device.action = states.BessAction(power, reactive_power)
-        for device in self.case.pv:
-            generation = float(device.result.gen_kw.iloc[0])
-            reactive_power = float(device.result.q_kvar.iloc[0])
-            device.action = states.PvAction(generation, reactive_power)
-
-    def _set_three_phase_actions(self):
-        for device in self.case.bess:
-            power = {}
-            reactive_power = {}
-            for phase in device.connection.phases:
-                power[phase] = float(device.result.p_net_kw[phase].iloc[0])
-                reactive_power[phase] = float(device.result.q_injection_kvar[phase].iloc[0])
-            device.action = three_phase.states.BessAction(power, reactive_power)
-        for device in self.case.pv:
-            generation = {}
-            reactive_power = {}
-            for phase in device.connection.phases:
-                generation[phase] = float(device.result.generation_kw[phase].iloc[0])
-                reactive_power[phase] = float(device.result.q_injection_kvar[phase].iloc[0])
-            device.action = three_phase.states.PvAction(generation, reactive_power)
+    def _set_actions(self, step=0, source=None):
+        source = self.case if source is None else source
+        is_three_phase = self.formulation is Formulation.THREE_PHASE_IVR
+        state_types = three_phase.states if is_three_phase else states
+        for device, planned in zip(self.case.bess, source.bess):
+            reactive = planned.result.q_injection_kvar if is_three_phase else planned.result.q_kvar
+            device.action = state_types.BessAction(profile_value(planned.result.p_net_kw, step), profile_value(reactive, step))
+        for device, planned in zip(self.case.pv, source.pv):
+            generation = planned.result.generation_kw if is_three_phase else planned.result.gen_kw
+            reactive = planned.result.q_injection_kvar if is_three_phase else planned.result.q_kvar
+            device.action = state_types.PvAction(profile_value(generation, step), profile_value(reactive, step))
 
     def _validate_observations(self, buses, bess, pv):
         case = self.case
@@ -387,7 +351,7 @@ class Teacher:
             raise ValueError("Observed voltage must be positive")
         for device in case.bess:
             soc = bess[device.id].soc_before_frac
-            if not device.soc_min_frac <= soc <= device.soc_max_frac:
+            if not device.soc_min_frac - SOC_TOLERANCE <= soc <= device.soc_max_frac + SOC_TOLERANCE:
                 raise ValueError(f"Observed SoC outside limits for {device.id!r}")
             target = device.soc_terminal_frac
             if target is None and device.cyclic_soc:
@@ -419,7 +383,7 @@ class Teacher:
             if state.phases != connected.connection.phases:
                 raise ValueError(f"BESS {connected.id!r} observation phases do not match")
             device = connected.device
-            if not device.soc_min_frac <= state.soc_before_frac <= device.soc_max_frac:
+            if not device.soc_min_frac - SOC_TOLERANCE <= state.soc_before_frac <= device.soc_max_frac + SOC_TOLERANCE:
                 raise ValueError(f"Observed SoC outside limits for {connected.id!r}")
         for connected in case.pv:
             if pv[connected.id].phases != connected.connection.phases:
@@ -484,26 +448,30 @@ class StateActionHistory:
 
     A window of one returns the current state in a one-item list.
     action_history=True also returns the action paired with each state.
+    pad_initial repeats the first state; missing action-history labels are None.
     Use one history per episode and controller.
     """
 
-    def __init__(self, window: int = 1, action_history: bool = False):
+    def __init__(self, window: int = 1, action_history: bool = False, pad_initial: bool = False):
         if isinstance(window, bool) or not isinstance(window, int) or window < 1:
             raise ValueError("window must be a positive integer")
         self._history = deque(maxlen=window)
         self.action_history = action_history
+        self.pad_initial = pad_initial
 
     @property
     def window(self):
         return self._history.maxlen
 
-    def append(self, state: dict, action: dict) -> tuple[list[dict], dict | list[dict]] | None:
+    def append(self, state: dict, action: dict) -> tuple[list[dict], dict | list[dict | None]] | None:
         """Return a state window and either the current action or aligned actions."""
         self._history.append((deepcopy(state), deepcopy(action)))
-        if len(self._history) < self.window:
+        padding = self.window - len(self._history)
+        if padding and not self.pad_initial:
             return None
         states, actions = zip(*deepcopy(self._history))
-        return list(states), list(actions) if self.action_history else actions[-1]
+        states = [deepcopy(states[0]) for _ in range(padding)] + list(states)
+        return states, [None] * padding + list(actions) if self.action_history else actions[-1]
 
     def reset(self):
         self._history.clear()

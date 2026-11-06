@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Mapping
 
+from opf_teacher.opf.common import SOC_TOLERANCE
 from opf_teacher.opf.three_phase.phases import normalize_phases, phase_values
 
 
@@ -48,7 +49,7 @@ class BessState:
             self.previous_q_kvar, phases, label="previous BESS reactive power"
         )
         self.soc_before_frac = float(self.soc_before_frac)
-        if not 0.0 <= self.soc_before_frac <= 1.0:
+        if not -SOC_TOLERANCE <= self.soc_before_frac <= 1.0 + SOC_TOLERANCE:
             raise ValueError("Observed BESS SoC must be between zero and one")
 
     @property

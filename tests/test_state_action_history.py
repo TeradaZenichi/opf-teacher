@@ -4,6 +4,34 @@ from opf_teacher.teacher import StateActionHistory, TemporalTeacher
 
 
 class StateActionHistoryTest(unittest.TestCase):
+    def test_initial_padding_repeats_the_first_state_without_aliasing(self):
+        history = StateActionHistory(3, pad_initial=True)
+        state, action = {"value": [0]}, {"p": 10}
+        x, y = history.append(state, action)
+        if x != [state, state, state] or y != action:
+            self.fail("Initial padding must repeat the first observation and keep the current target")
+        x[0]["value"][0] = 99
+        if x[1]["value"] != [0] or state["value"] != [0]:
+            self.fail("Repeated observations must be independent copies")
+        x, y = history.append({"value": [1]}, {"p": 20})
+        if x != [{"value": [0]}, {"value": [0]}, {"value": [1]}] or y != {"p": 20}:
+            self.fail("Padding must shrink as real observations accumulate")
+        x, _ = history.append({"value": [2]}, {})
+        if x != [{"value": [0]}, {"value": [1]}, {"value": [2]}]:
+            self.fail("A full window must contain only real chronological observations")
+        history.reset()
+        if history.append({"value": [10]}, {})[0] != [{"value": [10]}] * 3:
+            self.fail("A new episode must pad from its own first observation")
+
+    def test_initial_padding_marks_missing_action_labels(self):
+        history = StateActionHistory(3, action_history=True, pad_initial=True)
+        x, y = history.append({"step": 0}, {"p": 10})
+        if x != [{"step": 0}] * 3 or y != [None, None, {"p": 10}]:
+            self.fail("Padding must not present the current target as a real past action")
+        _, y = history.append({"step": 1}, {"p": 20})
+        if y != [None, {"p": 10}, {"p": 20}]:
+            self.fail("Missing action labels must disappear as history fills")
+
     def test_default_window_returns_the_current_pair_immediately(self):
         history = StateActionHistory()
         self.assertEqual(history.window, 1)

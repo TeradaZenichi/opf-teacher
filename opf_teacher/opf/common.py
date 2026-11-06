@@ -8,6 +8,7 @@ import pandas as pd
 
 CASE_SCHEMA_VERSION = 1
 OBSERVATION_SCHEMA_VERSION = 2
+SOC_TOLERANCE = 1e-8
 
 VV_V = (0.90, 0.92, 0.98, 1.02, 1.08, 1.15)
 VV_Q = (1.0, 1.0, 0.0, 0.0, -1.0, -1.0)
@@ -15,6 +16,13 @@ VW_V = (0.90, 1.06, 1.10, 1.15)
 VW_P = (1.0, 1.0, 0.0, 0.0)
 QMAX_FRAC = 0.44
 V_MAX_EMERG = 1.10
+
+
+def profile_value(values, step=0):
+    """Read one scalar or phase-indexed profile sample in physical units."""
+    if isinstance(values, dict):
+        return {phase: profile_value(profile, step) for phase, profile in values.items()}
+    return float(values.iloc[step])
 
 
 @dataclass(eq=False)
