@@ -21,6 +21,7 @@ class PairConfig:
     solve: SolveConfig = field(default_factory=SolveConfig)
     block_weeks: int | None = None
     pad_initial: bool = False
+    extra_features: dict = field(default_factory=dict)
 
 
 def _initial_states(case):
@@ -37,7 +38,7 @@ def _initial_states(case):
     return bess, pv
 
 
-def _observe(teacher, bess, pv):
+def _observe(teacher, bess, pv, measurements=None):
     is_three_phase = isinstance(teacher.case, three_phase.Case)
     for device in teacher.case.pv:
         pv[device.id].available_kw = (
@@ -45,10 +46,12 @@ def _observe(teacher, bess, pv):
             if is_three_phase else float(device.avail_kw.iloc[0])
         )
     if is_three_phase:
+        if measurements is not None:
+            raise ValueError("Branch extras currently require a single-phase teacher")
         network = three_phase.ivr_model.IVRModel(teacher.case.horizon(0, 1))
         buses = network.pre_action_buses(bess, pv)
     else:
-        buses = pre_action_buses(teacher.case, bess, pv)
+        buses = pre_action_buses(teacher.case, bess, pv, measurements)
     teacher.observe(buses=buses, bess=bess, pv=pv)
 
 
@@ -66,7 +69,7 @@ def _replay(plan, config, bess, pv):
         raise ValueError("Teacher solution is not valid for imitation; check the solution quality")
     is_three_phase = isinstance(case, three_phase.Case)
     state_types = three_phase.states if is_three_phase else states
-    selector = PairSelector(case, config.mode, config.device_id)
+    selector = PairSelector(case, config.mode, config.device_id, config.extra_features)
     for step in case.periods:
         interval = teacher.case
         interval.timestamps = case.timestamps[step:step + 1]
@@ -83,10 +86,18 @@ def _replay(plan, config, bess, pv):
                 device.device.avail_kw = _slice(planned.device.avail_kw, step)
             else:
                 device.avail_kw = _slice(planned.avail_kw, step)
-        _observe(teacher, bess, pv)
+        needs_angles = "angle_before_deg" in config.extra_features.get("bus", []) and not is_three_phase
+        measurements = {} if config.extra_features.get("branches") or needs_angles else None
+        _observe(teacher, bess, pv, measurements)
         teacher._set_actions(step, source=case)
         interval.summary = case.summary
-        yield selector.select(*teacher.state_action())
+        state, action = teacher.state_action()
+        if measurements is not None:
+            state["branches"] = measurements["branches"]
+            if "angle_before_deg" in config.extra_features.get("bus", []):
+                for bus_id, angle in measurements["angles"].items():
+                    state["buses"][bus_id]["angle_before_deg"] = angle
+        yield selector.select(state, action)
         for device, planned in zip(interval.bess, case.bess):
             bess[device.id] = state_types.BessState(profile_value(planned.result.soc_frac, step),
                                                   device.action.p_net_kw, device.action.q_injection_kvar)

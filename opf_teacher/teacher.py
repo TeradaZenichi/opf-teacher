@@ -404,13 +404,47 @@ class Teacher:
                 device.action = None
 
 
+def select_extra_features(state, bus_id, selection):
+    """Select communicated signals and local terminals from a pre-action state."""
+    extras = {}
+    for group, fields in selection.items():
+        if not fields:
+            continue
+        if group == "branches":
+            terminals = [value for value in state["branches"] if value["bus"] == bus_id]
+            if not terminals:
+                raise ValueError(f"No branch terminals at bus {bus_id!r}")
+            extras[group] = {
+                f'{value["element"].lower()}/{value["terminal"]}/{value["phase"]}':
+                {name: value[name] for name in fields} for value in terminals
+            }
+        elif group in {"bess", "pv"}:
+            extras[group] = {}
+            for device_id, names in fields.items():
+                device = state[group][device_id]
+                extras[group][device_id] = {
+                    name: device[name] if isinstance(device[name], dict) or name == "soc_before_frac"
+                    else {"a": device[name]} for name in names
+                }
+        elif group in {"bus", "grid"}:
+            source = state["buses"][bus_id] if group == "bus" else state[group]
+            extras[group] = {
+                name: {"a": source[name]} if group == "bus" and not isinstance(source[name], dict)
+                else source[name] for name in fields
+            }
+        else:
+            raise ValueError(f"Unknown extra feature group {group!r}")
+    return extras
+
+
 class PairSelector:
     """Select central pairs or one BESS's local view of the global OPF."""
 
-    def __init__(self, case, mode="central", device_id="b1"):
+    def __init__(self, case, mode="central", device_id="b1", extra_features=None):
         if mode not in {"central", "local"}:
             raise ValueError("Observation mode must be 'central' or 'local'")
         self.mode = mode
+        self.extra_features = extra_features or {}
         self.device_id = device_id if mode == "local" else None
         self.bus_id = None
         if mode == "local":
@@ -433,6 +467,8 @@ class PairSelector:
         }
         if "phase_order" in state:
             local_state["phase_order"] = state["phase_order"]
+        if self.extra_features:
+            local_state["extras"] = select_extra_features(state, self.bus_id, self.extra_features)
         return deepcopy(local_state), deepcopy(action["bess"][self.device_id])
 
     def as_dict(self):

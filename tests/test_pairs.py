@@ -45,6 +45,35 @@ def retime(case, dt_h):
 
 
 class PairsTest(unittest.TestCase):
+    def test_extras_preserve_targets_and_use_pre_action_terminal_powers(self):
+        case = cases()[0][1]
+        base_x, base_y = collect_pairs(case, PairConfig(mode="local", window=1))
+        extras = {"branches": ["p_flow_pu", "q_flow_pu"],
+                  "bess": {"b1": ["soc_before_frac", "previous_p_pu"]},
+                  "grid": ["buy_price_per_kwh"]}
+        x, y = collect_pairs(case, PairConfig(mode="local", window=1, extra_features=extras))
+        if y != base_y:
+            self.fail("Observation extras must not change optimization targets")
+        first = x[0][0]
+        terminal = next(iter(first["extras"]["branches"].values()))
+        if abs(terminal["p_flow_pu"] + first["bus"]["p_load_pu"]) > 1e-8:
+            self.fail("Initial terminal power must describe demand before the new BESS action")
+        if first["extras"]["bess"]["b1"]["previous_p_pu"] != {"a": 0.0}:
+            self.fail("Communicated powers must use previous actions")
+        for original, extended in zip(base_x, x):
+            if any(extended[0][key] != original[0][key] for key in original[0]):
+                self.fail("Extras must preserve the original local observations")
+
+    def test_communicated_device_extras_keep_phase_values(self):
+        for formulation, case in cases():
+            extras = {"bess": {"b1": ["soc_before_frac", "previous_p_pu"]}}
+            x, _ = collect_pairs(case, PairConfig(formulation=formulation, mode="local", extra_features=extras))
+            communicated = x[0][0]["extras"]["bess"]["b1"]
+            if not isinstance(communicated["previous_p_pu"], dict):
+                self.fail("Communicated powers must retain named phases")
+            if communicated["soc_before_frac"] != x[0][0]["device"]["soc_before_frac"]:
+                self.fail("Communicated SoC must match the current measured state")
+
     def test_initial_padding_matches_policy_windows_for_both_scopes_and_formulations(self):
         for formulation, case in cases():
             for mode in ("central", "local"):

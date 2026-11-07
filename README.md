@@ -344,6 +344,7 @@ x, y = collect_pairs("examples/case5_local", config)
 | `solve` | A `SolveConfig` with solver settings. |
 | `block_weeks` | `None` (default): solve the selected case once; a positive integer: solve consecutive blocks of that many weeks. |
 | `pad_initial` | `False` (default): wait for a complete window; `True`: repeat the first observation to fill missing initial history. Ignored with `window=None`. |
+| `extra_features` | Optional local pre-action extras: `branches` lists terminal fields; `bess`/`pv` map device IDs to fields; `bus`/`grid` list observation fields. Default `{}`. |
 
 The return values are two lists of named dictionaries in pu. Each `x[i]` is
 a list of `window` observations when a window is set, including when `window=1`. By default,
