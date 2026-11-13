@@ -8,7 +8,7 @@ import re
 
 import pandas as pd
 
-from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, sell_price_profile, validate_case_config
 from opf_teacher.opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
 from opf_teacher.opf.three_phase.components import (
     Branch,
@@ -196,6 +196,7 @@ def load_case(path: str | Path) -> Case:
         timestamps=list(index),
         dt_h=infer_dt_hours(index),
         price=price,
+        sell_price=sell_price_profile(price_frame, index),
     )
     case.source_root = path
     case.config_path = config_path

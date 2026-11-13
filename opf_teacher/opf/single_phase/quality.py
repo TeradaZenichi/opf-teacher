@@ -21,6 +21,15 @@ def analyze_quality(model, case, tolerance=1e-6):
         high = 0.0 if upper is None else max(value - pyo.value(upper), 0.0)
         factor = scale.get(component, scale.get(component.parent_component(), 1.0))
         violations[component.name] = max(low, high) * factor
+    for constraint in model.component_data_objects(pyo.SOSConstraint, active=True):
+        if constraint.level != 1:
+            continue
+        values = []
+        for variable in constraint.get_variables():
+            value = pyo.value(variable, exception=False)
+            factor = scale.get(variable, scale.get(variable.parent_component(), 1.0))
+            values.append(float("inf") if value is None else abs(value) * factor)
+        violations[constraint.name] = sorted(values, reverse=True)[1] if len(values) > 1 else 0.0
     loss_deficits, energy_errors, execution_errors, availability_errors, simultaneous = [], [], [], [], []
     consistency = []
     for battery in case.bess:

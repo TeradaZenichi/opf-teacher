@@ -370,8 +370,7 @@ class IVRModel:
         imported = np.maximum(total_grid_kw, 0.0)
         exported = np.maximum(-total_grid_kw, 0.0)
         objective = case.dt_h * np.sum(
-            case.price.to_numpy()
-            * (imported - case.grid.feed_in_ratio * exported)
+            case.price.to_numpy() * imported - case.sell_prices.to_numpy() * exported
         )
         objective += 1e-8 * case.dt_h * np.sum(
             dispatch.p_charge + dispatch.p_discharge
@@ -622,7 +621,7 @@ class IVRModel:
         periods = self.case.n_periods
         device = connected.device
         price = self.case.price.to_numpy() * self.case.dt_h
-        objective = np.concatenate((price, -price))
+        objective = np.concatenate((price, -self.case.sell_prices.to_numpy() * self.case.dt_h))
         energy_coefficients = np.concatenate((
             np.full(periods, device.eta_charge * self.case.dt_h),
             np.full(periods, -self.case.dt_h / device.eta_discharge),

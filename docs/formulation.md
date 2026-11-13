@@ -183,6 +183,16 @@ $$
 0\leq P^{\text{BESS,dis}}_{s,t}\leq\overline P^{\text dis}_s.
 $$
 
+Charge and discharge are mutually exclusive at each battery and interval:
+
+$$
+\text{SOS1}(\{P^{\text{BESS,ch}}_{s,t},P^{\text{BESS,dis}}_{s,t}\}),
+\qquad \forall s\in S,\ t\in T.
+$$
+
+At most one member can be nonzero within solver tolerances. This leaves the
+economic objective unchanged and requires an SOS-capable solver such as Gurobi.
+
 The BESS inverter rating is enforced by
 
 $$
@@ -252,9 +262,10 @@ loss power is not deducted from the kVA rating to avoid numerical ill
 conditioning; the main rating remains enforced on $P^{\text{PV}}$ and
 $Q^{\text{PV}}$.
 
-Both loss relations are convex epigraphs. With positive energy prices, cost
-minimization also minimizes $P^{\text{loss,Q}}$, so the inequalities are tight
-at the optimum.
+Both loss relations are convex epigraphs. Equality is not guaranteed by a
+positive purchase tariff alone, particularly when export is unpaid or stored
+energy has no marginal value. Physical loss and energy consistency are checked
+after solving; SOS1 does not remove this separate relaxation.
 
 For `fixed_pf`, $Q^{\text{PV}}_{g,t}=\tan\varphi_gP^{\text{PV}}_{g,t}$.
 The other supported modes are `optimal`, `volt-var`, `volt-watt`, and

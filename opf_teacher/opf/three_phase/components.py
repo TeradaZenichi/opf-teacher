@@ -283,6 +283,7 @@ class Case:
     timestamps: Sequence[pd.Timestamp]
     dt_h: float
     price: pd.Series
+    sell_price: pd.Series | None = None
     summary: object | None = field(default=None, init=False)
     formulation: str | None = field(default=None, init=False)
     quality: dict | None = field(default=None, init=False)
@@ -308,6 +309,10 @@ class Case:
             raise ValueError("Price index must match the case timestamps")
         if self.price.isna().any() or not self.price.map(math.isfinite).all():
             raise ValueError("Price values must be finite")
+        if self.sell_price is not None:
+            self.sell_price = self.sell_price.astype(float).copy()
+            if not self.sell_price.index.equals(self.index) or not self.sell_price.map(math.isfinite).all():
+                raise ValueError("Sell prices must be finite and match the case timestamps")
 
         expected_index = self.index
         for bus_id, bus in self.buses.items():
@@ -341,6 +346,10 @@ class Case:
                     raise ValueError(f"PV {device.id!r} profile does not match the case horizon")
 
     @property
+    def sell_prices(self):
+        return self.price * self.grid.feed_in_ratio if self.sell_price is None else self.sell_price
+
+    @property
     def periods(self):
         return range(len(self.timestamps))
 
@@ -372,6 +381,8 @@ class Case:
         case = deepcopy(self)
         case.timestamps = case.timestamps[start:stop]
         case.price = case.price.iloc[start:stop].copy()
+        if case.sell_price is not None:
+            case.sell_price = case.sell_price.iloc[start:stop].copy()
         for bus in case.buses.values():
             for phase in bus.phases:
                 bus.p_load_kw[phase] = bus.p_load_kw[phase].iloc[start:stop].copy()

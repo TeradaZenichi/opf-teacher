@@ -59,6 +59,7 @@ class EnvironmentContractTest(unittest.TestCase):
             self.skipTest("SOCP integration requires a compatible solver")
         source = "tests/fixtures/single_phase_case"
         original = Teacher(source, formulation="single_phase_socp").case.horizon(0, periods=2)
+        original.bess[0].cyclic_soc = True
         env = MicrogridEnv(EnvironmentConfig(source, 2))
         observation, _ = env.reset()
         for step in original.periods:

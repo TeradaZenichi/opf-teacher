@@ -34,6 +34,7 @@ def timeseries_dataframe(case: Case) -> pd.DataFrame:
     frame = pd.DataFrame(index=case.index)
     frame.index.name = "timestamp"
     frame["price_per_kwh"] = case.price
+    frame["sell_price_per_kwh"] = case.sell_prices
     frame["grid_import_kw"] = case.grid.result.import_kw
     frame["grid_export_kw"] = case.grid.result.export_kw
     frame["grid_q_kvar"] = case.grid.result.q_kvar
@@ -109,6 +110,7 @@ def devices_dataframe(case: Case) -> pd.DataFrame:
 def buses_dataframe(case: Case) -> pd.DataFrame:
     frame = _time_frame(case)
     frame["price_per_kwh"] = case.price.to_numpy()
+    frame["sell_price_per_kwh"] = case.sell_prices.to_numpy()
     frame["grid_import_kw"] = case.grid.result.import_kw.to_numpy()
     frame["grid_export_kw"] = case.grid.result.export_kw.to_numpy()
     frame["grid_q_kvar"] = case.grid.result.q_kvar.to_numpy()

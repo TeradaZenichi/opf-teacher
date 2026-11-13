@@ -163,6 +163,7 @@ class Case:
     timestamps: list
     dt_h: float
     price: pd.Series
+    sell_price: pd.Series | None = None
     parent_branch: dict = field(default_factory=dict, init=False)
     children: dict = field(default_factory=dict, init=False)
     bus_name_to_id: dict = field(default_factory=dict, init=False)
@@ -171,6 +172,10 @@ class Case:
     quality: dict | None = field(default=None, init=False)
     source_root: object = field(default=None, init=False)
     config_path: object = field(default=None, init=False)
+
+    @property
+    def sell_prices(self):
+        return self.price * self.grid.feed_in_ratio if self.sell_price is None else self.sell_price
 
     @property
     def periods(self): return range(len(self.timestamps))
@@ -196,6 +201,8 @@ class Case:
         case = deepcopy(self)
         case.timestamps = case.timestamps[start:stop]
         case.price = case.price.iloc[start:stop].copy()
+        if case.sell_price is not None:
+            case.sell_price = case.sell_price.iloc[start:stop].copy()
         for bus in case.buses.values():
             bus.p_load_kw = bus.p_load_kw.iloc[start:stop].copy()
             bus.q_load_kw = bus.q_load_kw.iloc[start:stop].copy()

@@ -65,8 +65,6 @@ def _replay(plan, config, bess, pv):
     """Replay one optimized plan using pre-action snapshots and exact planned SoC."""
     teacher = Teacher(plan.case.horizon(0, 1), formulation=plan.formulation)
     case = plan.solve(config=config.solve)
-    if not (case.quality or {}).get("valid_for_imitation", True):
-        raise ValueError("Teacher solution is not valid for imitation; check the solution quality")
     is_three_phase = isinstance(case, three_phase.Case)
     state_types = three_phase.states if is_three_phase else states
     selector = PairSelector(case, config.mode, config.device_id, config.extra_features)
@@ -74,6 +72,7 @@ def _replay(plan, config, bess, pv):
         interval = teacher.case
         interval.timestamps = case.timestamps[step:step + 1]
         interval.price = _slice(case.price, step)
+        interval.sell_price = None if case.sell_price is None else _slice(case.sell_price, step)
         for bus_id, bus in interval.buses.items():
             bus.p_load_kw = _slice(case.buses[bus_id].p_load_kw, step)
             if is_three_phase:
@@ -91,6 +90,7 @@ def _replay(plan, config, bess, pv):
         _observe(teacher, bess, pv, measurements)
         teacher._set_actions(step, source=case)
         interval.summary = case.summary
+        interval.quality = case.quality
         state, action = teacher.state_action()
         if measurements is not None:
             state["branches"] = measurements["branches"]

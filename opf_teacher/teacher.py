@@ -123,7 +123,7 @@ class Teacher:
                 connected.avail_kw = connected.avail_kw.astype(float)
                 connected.avail_kw.iloc[0] = connected.state.available_kw
         state_types = three_phase.states if is_three_phase else states
-        case.grid.state = state_types.GridState(price, price * case.grid.feed_in_ratio)
+        case.grid.state = state_types.GridState(price, float(case.sell_prices.iloc[0]))
         self.model = None
         self._clear_results()
         return self
@@ -213,7 +213,7 @@ class Teacher:
 
     def _validate_observed_grid(self, grid):
         expected_buy = float(self.case.price.iloc[0])
-        expected_sell = expected_buy * self.case.grid.feed_in_ratio
+        expected_sell = float(self.case.sell_prices.iloc[0])
         if not math.isclose(
             float(grid["buy_price_per_kwh"]), expected_buy,
             rel_tol=0.0, abs_tol=1e-12,
@@ -261,6 +261,8 @@ class Teacher:
 
     def state_action(self):
         """Return central X/Y in pu; the owned Case retains physical model units."""
+        if not (self.case.quality or {}).get("valid_for_imitation", True):
+            raise ValueError("Teacher solution is not valid for imitation; check the solution quality")
         state, action = self.case.state_action()
         return self.normalizer.normalize(state), self.normalizer.normalize(action)
 
@@ -283,6 +285,8 @@ class Teacher:
             optimizer = pyo.SolverFactory(solver)
             if optimizer is None or not optimizer.available(exception_flag=False):
                 raise RuntimeError(f"Solver '{solver}' unavailable")
+            if solver.startswith("gurobi"):
+                optimizer.options["BarQCPConvTol"] = 1e-9
             for name, value in settings.solver_options.items():
                 optimizer.options[name] = value
             solution = optimizer.solve(solver_model, tee=settings.tee, load_solutions=False)
@@ -327,7 +331,7 @@ class Teacher:
         if not case.n_periods or not math.isfinite(case.dt_h) or case.dt_h <= 0:
             raise ValueError("The observed case requires periods and positive dt_h")
         price = float(case.price.iloc[0])
-        if not math.isfinite(price) or not math.isfinite(case.grid.feed_in_ratio):
+        if not math.isfinite(price) or not math.isfinite(float(case.sell_prices.iloc[0])):
             raise ValueError("Observed grid tariffs must be finite")
         for devices in (case.bess, case.pv):
             if len({d.id for d in devices}) != len(devices):

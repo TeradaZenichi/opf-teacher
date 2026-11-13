@@ -108,7 +108,7 @@ def attach_results(m, case: Case, status: str, socp_gap_tolerance: float = DEFAU
 
     imp = series([base.to_kw(_val(m.pimp[t])) for t in T])
     exp = series([base.to_kw(_val(m.pexp[t])) for t in T])
-    cost = (imp - case.grid.feed_in_ratio * exp) * case.price * case.dt_h
+    cost = (imp * case.price - exp * case.sell_prices) * case.dt_h
     case.grid.result = GridResult(
         import_kw=imp,
         export_kw=exp,

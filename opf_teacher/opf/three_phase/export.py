@@ -22,6 +22,7 @@ def _frame(case):
 def buses_dataframe(case: Case):
     frame = _frame(case)
     frame["price_per_kwh"] = case.price.to_numpy()
+    frame["sell_price_per_kwh"] = case.sell_prices.to_numpy()
     frame["grid_import_total_kw"] = case.grid.result.import_total_kw.to_numpy()
     frame["grid_export_total_kw"] = case.grid.result.export_total_kw.to_numpy()
     for phase in case.grid.phases:

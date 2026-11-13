@@ -56,7 +56,8 @@ directory. Run the examples to recreate them. Local `.old/`
 archives are ignored by Git and are not used by the active scripts.
 
 Continuous SOCP cases use the included Clarabel solver on CPU. Cases with SOS
-constraints, including piecewise PV controls, use Gurobi and require its license.
+constraints, including BESS charge/discharge exclusivity and piecewise PV
+controls, use Gurobi and require its license.
 
 ## Running
 
@@ -178,6 +179,10 @@ section can override the default data filenames:
 
 Without this section, the conventional filenames are used. The examples under
 `examples/` follow the same contract and remain self-contained.
+
+The price CSV may include `sell_price_per_kwh` for an independent export tariff.
+When absent, export uses `price_per_kwh * grid.feed_in_tariff_ratio`. The selected
+sell tariff is preserved in horizons, observations, supervised pairs and exports.
 
 Case files use `"schema_version": 1`. Runtime observations use the independent
 `"observation_schema_version": 2` contract, with `units: "pu"` and explicit bases.
@@ -636,6 +641,8 @@ Only optimal or locally optimal solver terminations produce actions. Single-phas
 results include scaled constraint checks and physical device diagnostics in
 `case.quality`. Use `case.quality["valid_for_imitation"]` to accept training
 labels, and verify execution through an OpenDSS replay.
+`Teacher.state_action()` rejects solutions explicitly marked invalid for
+imitation. `solve()` still returns the owned case for physical diagnostics.
 
 ## Per-unit training pairs
 
@@ -761,6 +768,13 @@ solutions are mapped back to the original model. Public pu observations,
 actions, case bases, and physical result units retain their documented meaning.
 For convex buy/sell tariffs, a signed grid-power variable and cost epigraph
 avoid an import/export SOS1 restriction. Nonconvex tariffs retain that restriction.
+Each BESS also has an SOS1 pair per interval, allowing at most one of charging
+and discharging to be nonzero within numerical tolerances. This does not change
+the energy-cost objective. BESS SOCP cases therefore use Gurobi by default;
+continuous cases without SOS constraints can still use Clarabel. The separate
+inverter-loss consistency checks remain necessary.
+Gurobi defaults to `BarQCPConvTol=1e-9` to retain energy consistency in long
+intervals; explicit `solver_options` can override it.
 The solver result is checked before loading values; unsuccessful termination
 never produces a substitute action.
 

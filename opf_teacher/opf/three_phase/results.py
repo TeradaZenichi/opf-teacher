@@ -304,11 +304,11 @@ def _attach_grid_results(model, case):
             grid_q[phase].append(values[position].imag)
     import_series = _phase_series(grid_import, index)
     export_series = _phase_series(grid_export, index)
-    cost = case.dt_h * case.price * (
-        sum(import_series.values(), start=pd.Series(0.0, index=index))
-        - case.grid.feed_in_ratio
-        * sum(export_series.values(), start=pd.Series(0.0, index=index))
-    )
+    imported = sum(import_series.values(), start=pd.Series(0.0, index=index))
+    exported = sum(export_series.values(), start=pd.Series(0.0, index=index))
+    # The tariff applies to the net exchange across the whole grid connection.
+    net = imported - exported
+    cost = case.dt_h * (case.price * net.clip(lower=0) + case.sell_prices * net.clip(upper=0))
     case.grid.result = GridResult(
         import_kw=import_series,
         export_kw=export_series,

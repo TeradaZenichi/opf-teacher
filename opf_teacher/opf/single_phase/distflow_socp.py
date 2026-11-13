@@ -25,7 +25,9 @@ class DistFlowModel:
             for bus_id in case.buses if bus_id != case.root
         }
         self.voltage_upper_limit = pv_droop.relaxes_voltage(case)
-        self.convex_grid = all(float(price) >= float(price) * case.grid.feed_in_ratio for price in case.price)
+        self.sell_prices = case.sell_prices
+        self.convex_grid = bool((case.price >= self.sell_prices).all())
+        self.symmetric_prices = bool((case.price == self.sell_prices).all())
         self.model = None
 
     def build(self) -> pyo.ConcreteModel:
@@ -55,7 +57,7 @@ class DistFlowModel:
             model.pgrid = pyo.Var(model.T, bounds=(-self.base.pu_power(grid.p_export_max_kw), self.base.pu_power(grid.p_import_max_kw)))
             model.pimp = pyo.Expression(model.T, rule=lambda m, t: pyo.Expr_if(IF=m.pgrid[t] >= 0, THEN=m.pgrid[t], ELSE=0.0))
             model.pexp = pyo.Expression(model.T, rule=lambda m, t: pyo.Expr_if(IF=m.pgrid[t] <= 0, THEN=-m.pgrid[t], ELSE=0.0))
-            if grid.feed_in_ratio != 1.0:
+            if not self.symmetric_prices:
                 model.cost_rate = pyo.Var(model.T)
         else:
             model.pimp = pyo.Var(model.T, bounds=(0.0, self.base.pu_power(grid.p_import_max_kw)))
@@ -173,6 +175,8 @@ class DistFlowModel:
         model.pv_no_night_q = pyo.Constraint(model.G, model.T, rule=self.pv_night_reactive_rule)
         model.bess_capability = pyo.Constraint(model.S, model.T, rule=self.battery_capability_rule)
         model.bess_q_loss = pyo.Constraint(model.S, model.T, rule=self.battery_loss_rule)
+        model.bess_no_simultaneous = pyo.SOSConstraint(
+            model.S, model.T, rule=lambda m, battery, time: [m.pch[battery, time], m.pdis[battery, time]], sos=1)
         fixed = [(pv.id, time) for pv in self.pv.values()
                  if pv.control == "fixed_pf" for time in model.T]
         if fixed:
@@ -184,9 +188,9 @@ class DistFlowModel:
         model.soc_terminal = pyo.Constraint(model.S, rule=self.battery_terminal_rule)
         if not self.convex_grid:
             model.no_roundtrip = pyo.SOSConstraint(model.T, rule=self.grid_exchange_rule, sos=1)
-        elif self.case.grid.feed_in_ratio != 1.0:
+        elif not self.symmetric_prices:
             model.buy_cost = pyo.Constraint(model.T, rule=lambda m, t: m.cost_rate[t] >= float(self.case.price.iloc[t]) * m.pgrid[t])
-            model.sell_cost = pyo.Constraint(model.T, rule=lambda m, t: m.cost_rate[t] >= float(self.case.price.iloc[t]) * self.case.grid.feed_in_ratio * m.pgrid[t])
+            model.sell_cost = pyo.Constraint(model.T, rule=lambda m, t: m.cost_rate[t] >= float(self.sell_prices.iloc[t]) * m.pgrid[t])
 
     def active_balance_rule(self, model, bus_id, time):
         outgoing = sum(model.P[child, time] for child in self.case.children.get(bus_id, []))
@@ -291,12 +295,12 @@ class DistFlowModel:
         model.cost = pyo.Objective(rule=self.energy_cost_rule, sense=pyo.minimize)
 
     def energy_cost_rule(self, model):
-        if self.convex_grid and self.case.grid.feed_in_ratio == 1.0:
+        if self.convex_grid and self.symmetric_prices:
             return self.base.s_base_kva * self.case.dt_h * sum(float(self.case.price.iloc[t]) * model.pgrid[t] for t in model.T)
         if self.convex_grid:
             return self.base.s_base_kva * self.case.dt_h * sum(model.cost_rate[t] for t in model.T)
         return self.base.s_base_kva * self.case.dt_h * sum(
-            float(self.case.price.iloc[time]) * (model.pimp[time] - self.case.grid.feed_in_ratio * model.pexp[time])
+            float(self.case.price.iloc[time]) * model.pimp[time] - float(self.sell_prices.iloc[time]) * model.pexp[time]
             for time in model.T
         )
 

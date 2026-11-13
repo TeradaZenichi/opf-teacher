@@ -20,6 +20,7 @@ class ActivePowerModel:
         if tie_break_penalty < 0.0:
             raise ValueError("tie_break_penalty cannot be negative")
         self.case = case
+        self.sell_prices = case.sell_prices
         self.base = case.base
         self.tie_break_penalty = tie_break_penalty
         self.batteries = {battery.id: battery for battery in case.bess}
@@ -149,7 +150,7 @@ class ActivePowerModel:
         model = self.model
         scale = self.base.s_base_kva * self.case.dt_h
         model.energy_cost = pyo.Expression(expr=scale * sum(
-            float(self.case.price.iloc[time]) * (model.pimp[time] - self.case.grid.feed_in_ratio * model.pexp[time])
+            float(self.case.price.iloc[time]) * model.pimp[time] - float(self.sell_prices.iloc[time]) * model.pexp[time]
             for time in model.T
         ))
         model.tie_break_cost = pyo.Expression(expr=self.tie_break_penalty * scale * (
@@ -194,7 +195,7 @@ def _attach_active_results(model, case: Case, status: str) -> Case:
     zeros = series([0.0] * len(periods))
     imported = series([base.to_kw(value(model.pimp[t])) for t in periods])
     exported = series([base.to_kw(value(model.pexp[t])) for t in periods])
-    grid_cost = (imported - case.grid.feed_in_ratio * exported) * case.price * case.dt_h
+    grid_cost = (imported * case.price - exported * case.sell_prices) * case.dt_h
     case.grid.result = GridResult(imported, exported, zeros.copy(), grid_cost)
 
     for bus_id, bus in case.buses.items():

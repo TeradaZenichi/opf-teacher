@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, validate_case_config
+from opf_teacher.opf.common import Base, Bess, Pv, infer_dt_hours, resolve_case_source, sell_price_profile, validate_case_config
 from opf_teacher.opf.single_phase.components import Branch, Bus, Case, Grid
 from opf_teacher.opf.opendss import OpenDSSSource, load_opendss_network, resolve_bus_id
 
@@ -163,6 +163,7 @@ def load_case(path: str | Path) -> Case:
         timestamps=list(idx),
         dt_h=infer_dt_hours(idx),
         price=price,
+        sell_price=sell_price_profile(price_df, idx),
     )
     case.bus_name_to_id = dict(bus_name_to_id)
     case.source_root = path

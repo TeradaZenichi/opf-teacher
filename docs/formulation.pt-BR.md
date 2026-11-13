@@ -173,6 +173,17 @@ $$
 0 \le P^{\text{BESS,dis}}_{s,t} \le \overline{P}^{\text{dis}}_s
 $$
 
+Carga e descarga são mutuamente exclusivas para cada bateria e intervalo:
+
+$$
+\text{SOS1}(\{P^{\text{BESS,ch}}_{s,t},P^{\text{BESS,dis}}_{s,t}\}),
+\qquad \forall s\in S,\ t\in T.
+$$
+
+No máximo um membro pode ser não nulo, dentro das tolerâncias do solver.
+O objetivo econômico permanece igual; é necessário um solver com suporte a
+SOS, como o Gurobi.
+
 O inversor do BESS respeita:
 
 $$
@@ -231,9 +242,10 @@ potência de perdas não é descontada do limite nominal em kVA para evitar má
 condição numérica; o limite principal continua aplicado a $P^{\text{PV}}$ e
 $Q^{\text{PV}}$.
 
-As duas relações de perda são epígrafes convexas. Com tarifas de energia
-positivas, minimizar o custo também minimiza $P^{\text{loss,Q}}$, fazendo as
-desigualdades atuarem como igualdades na solução ótima.
+As duas relações de perda são epígrafes convexas. Uma tarifa de compra positiva
+não garante igualdade, especialmente quando a exportação não é remunerada ou
+a energia armazenada não tem valor marginal. A consistência física das perdas
+e da energia é verificada após a solução; SOS1 não elimina essa outra relaxação.
 
 No modo `fixed_pf`, $Q^{\text{PV}}_{g,t}=\tan\varphi_gP^{\text{PV}}_{g,t}$.
 Os demais modos são `optimal`, `volt-var`, `volt-watt` e `volt-var-watt`.

@@ -12,6 +12,7 @@ def scale_device(model, device, nominals):
 
 
 def scale_model(model, case):
+    sell_prices = case.sell_prices
     demand = max(sum(abs(bus.p_load_kw.iloc[t]) + abs(bus.q_load_kw.iloc[t]) for bus in case.buses.values()) for t in case.periods)
     solar = max(sum(float(device.avail_kw.iloc[t]) for device in case.pv) for t in case.periods)
     power = case.base.s_base_kva / max(demand, solar, 1.0)
@@ -32,7 +33,7 @@ def scale_model(model, case):
     scale[model.socp] = power ** 2
     if hasattr(model, "cost_rate"):
         for time in model.T:
-            price = max(abs(float(case.price.iloc[time])), abs(float(case.price.iloc[time]) * case.grid.feed_in_ratio)) or 1.0
+            price = max(abs(float(case.price.iloc[time])), abs(float(sell_prices.iloc[time]))) or 1.0
             scale[model.cost_rate[time]] = power / price
             scale[model.buy_cost[time]] = power / price
             scale[model.sell_cost[time]] = power / price
