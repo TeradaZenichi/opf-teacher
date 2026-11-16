@@ -182,6 +182,8 @@ def load_case(path: str | Path) -> Case:
     )
 
     device_cfg = _read_json(devices_path) if devices_path.exists() else {}
+    if device_cfg.get("evse"):
+        raise NotImplementedError("EVSE devices require an EVSE-aware teacher formulation")
     bess = [_load_bess(item, case_bus) for item in device_cfg.get("bess", [])]
     pv = [_load_pv(item, path, index, case_bus) for item in device_cfg.get("pv", [])]
 

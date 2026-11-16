@@ -116,6 +116,8 @@ def load_case(path: str | Path) -> Case:
     price = pd.Series(price_df["price_per_kwh"].to_numpy(), index=idx)
 
     dev = _read_json(devices_path) if devices_path.exists() else {}
+    if dev.get("evse"):
+        raise NotImplementedError("EVSE devices require an EVSE-aware teacher formulation")
 
     bess = [
         Bess(

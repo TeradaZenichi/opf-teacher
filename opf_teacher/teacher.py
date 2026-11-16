@@ -132,11 +132,13 @@ class Teacher:
         """Consume named pu observations and convert only at the model boundary."""
 
         version = observation.get("observation_schema_version")
-        if version != OBSERVATION_SCHEMA_VERSION:
+        if version not in (OBSERVATION_SCHEMA_VERSION, 4):
             raise ValueError(
                 f"Unsupported observation_schema_version {version!r}; "
-                f"expected {OBSERVATION_SCHEMA_VERSION}"
+                f"expected {OBSERVATION_SCHEMA_VERSION} or 4"
             )
+        if observation.get("evse"):
+            raise NotImplementedError("EVSE observations require an EVSE-aware teacher formulation")
         if observation.get("units") != "pu":
             raise ValueError("Named observations must use units='pu'")
         if observation.get("phase_power_base") != "total_network":

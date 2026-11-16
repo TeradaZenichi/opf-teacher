@@ -6,6 +6,16 @@ Optimal operation of BESS and distributed energy resources in a radial
 distribution network using the DistFlow model with an SOCP relaxation. All
 electrical quantities are represented in per unit.
 
+## Environment compatibility
+
+`Teacher.observe_dict()` accepts global pu observations with schema version 2
+or 4. BESS/PV fields retain their units, signs and pre-action timing; teacher
+output pairs keep schema version 2. Device-local and controller observations
+are policy inputs, not substitutes for the global OPF observation.
+
+EVSE devices and nonempty EVSE observations are rejected explicitly: the
+teacher does not yet model charging sessions, V2G or departure energy targets.
+
 ## Notation
 
 - Buses $i,j \in B$ and branches $(i,j) \in L$, directed from parent $i$ to
